@@ -1,0 +1,22 @@
+# Cloudflare Workers配置文件
+name = "hbmusic-api"
+main = "worker.js"
+compatibility_date = "2023-12-01"
+
+# 开发环境配置
+[dev]
+port = 8787
+local_protocol = "https"
+
+# 环境变量配置
+[vars]
+API_BASE_URL = "https://api.931125.xyz"
+
+# 路由配置 - 取消注释以使用自定义域名
+[[routes]]
+pattern = "apiback.931125.xyz/*"  # 你的API域名
+zone_name = "931125.xyz"          # 你的根域名
+
+# 触发器配置
+[triggers]
+crons = [] 
