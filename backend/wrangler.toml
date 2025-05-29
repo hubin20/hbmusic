@@ -2,6 +2,7 @@
 name = "hbmusic-api"
 main = "worker.js"
 compatibility_date = "2023-12-01"
+compatibility_flags = ["nodejs_compat"]
 
 # 开发环境配置
 [dev]
@@ -12,11 +13,26 @@ local_protocol = "https"
 [vars]
 API_BASE_URL = "https://api.931125.xyz"
 
-# 路由配置 - 取消注释以使用自定义域名
+# 路由配置
 [[routes]]
-pattern = "apiback.931125.xyz/*"  # 你的API域名
-zone_name = "931125.xyz"          # 你的根域名
+pattern = "apiback.931125.xyz"  # 根路径
+zone_name = "931125.xyz"
+
+[[routes]]
+pattern = "apiback.931125.xyz/*"  # 所有路径
+zone_name = "931125.xyz"
 
 # 触发器配置
 [triggers]
-crons = [] 
+crons = []
+
+# 其他设置
+[site]
+bucket = "./public" # 如果有静态资源
+
+# 自定义域名
+[env.production]
+routes = [
+  { pattern = "apiback.931125.xyz", zone_name = "931125.xyz" },
+  { pattern = "apiback.931125.xyz/*", zone_name = "931125.xyz" }
+] 
