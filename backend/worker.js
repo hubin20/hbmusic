@@ -208,7 +208,7 @@ router.get('/song/url', async (request) => {
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/song/url/v1?id=${id}&level=exhigh`);
+    const response = await fetch(`${API_BASE_URL}/song/url/v1?id=${id}&level=lossless`);
     return processApiResponse(response);
   } catch (error) {
     return cors()(new Response(JSON.stringify({

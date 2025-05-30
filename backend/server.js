@@ -174,7 +174,7 @@ app.get('/api/song/url', async (req, res) => {
   try {
     // 使用清理后的ID请求API
     const response = await axios.get(`${API_BASE_URL}/song/url/v1`, { // 或者 /song/url，取决于API版本
-      params: { id: cleanId, level: 'exhigh' }, // level 参数可以调整音质
+      params: { id: cleanId, level: 'lossless' }, // level 参数可以调整音质
     });
     res.json(response.data);
   } catch (error) {
@@ -255,7 +255,7 @@ app.get('/api/lyric', async (req, res) => {
 
           // 尝试获取酷我歌曲详情以获取专辑图片
           try {
-            const songDetailUrl = `${FALLBACK_API_BASE}?id=${kwId}&type=song&format=json`;
+            const songDetailUrl = `${FALLBACK_API_BASE}?id=${kwId}&type=song&format=json&level=lossless`;
             const songDetailResponse = await axios.get(songDetailUrl);
             if (songDetailResponse.data && songDetailResponse.data.code === 200 && songDetailResponse.data.data) {
               const songData = songDetailResponse.data.data;
