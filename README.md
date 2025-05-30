@@ -135,15 +135,6 @@ cd backend
 npm run worker:deploy
 ```
 
-## 数据来源
-
-- **主API**: https://api.931125.xyz
-  - 接口文档: https://binaryify.github.io/NeteaseCloudMusicApi/#/?id=neteasecloudmusicapi
-  - 包含解灰服务，可能请求较慢
-
-- **备用API**: https://kw-api.cenguigui.cn
-  - 接口文档: https://kw-api.cenguigui.cn/
-  - 用于补充主API的不可用资源
 
 ## 贡献指南
 
