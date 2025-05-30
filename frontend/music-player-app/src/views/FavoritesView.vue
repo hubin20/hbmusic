@@ -369,13 +369,53 @@ const playSong = (song, index) => {
   if (!song) return;
   
   try {
-    // 使用playerStore播放歌曲
-    playerStore.playSong(song, {
+    console.log(`[FavoritesView] 尝试播放收藏歌曲: ${song.name}, ID: ${song.id}, 索引: ${index}`);
+    
+    // 确保歌曲ID是字符串类型
+    const songToPlay = {
+      ...song,
+      id: String(song.id)
+    };
+    
+    // 构建完整的播放上下文，确保包含必要信息
+    const playContext = {
       index: index,
-      fullQueue: favoriteSongs.value
+      fullQueue: favoriteSongs.value,
+      forceRefreshUrl: true // 强制刷新URL标志，确保获取最新的播放地址
+    };
+    
+    // 使用nextTick确保DOM更新后再播放
+    nextTick(() => {
+      // 直接调用播放器的playSong方法，它会处理URL获取
+      playerStore.playSong(songToPlay, playContext)
+        .catch(error => {
+          console.error(`[FavoritesView] 播放歌曲时出错:`, error);
+          
+          // 如果播放失败，尝试再次播放
+          setTimeout(() => {
+            console.log(`[FavoritesView] 第一次播放失败，尝试重新播放`);
+            playerStore.playSong(songToPlay, playContext);
+          }, 800);
+        });
+      
+      // 确保播放状态更新
+      setTimeout(() => {
+        if (!playerStore.isPlaying) {
+          console.log(`[FavoritesView] 播放状态未更新，尝试强制播放`);
+          playerStore.isPlaying = true;
+          
+          // 获取音频元素并尝试播放
+          const audioElement = document.getElementById('audio-player');
+          if (audioElement) {
+            audioElement.play().catch(err => {
+              console.error('[FavoritesView] 强制播放失败:', err);
+            });
+          }
+        }
+      }, 800);
     });
   } catch (err) {
-    console.error('播放歌曲失败:', err);
+    console.error('播放收藏歌曲失败:', err);
   }
 };
 

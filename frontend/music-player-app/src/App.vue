@@ -682,6 +682,19 @@ onBeforeMount(() => {
 });
 
 onMounted(() => {
+  // 清除应用启动标记，以便能正确识别应用刚启动的状态
+  localStorage.removeItem('app_has_started');
+  console.log('[App.vue] 清除应用启动标记，以便正确识别应用刚启动');
+  
+  // 重置上次更新时间
+  dataCache.resetLastUpdateTime();
+  
+  // 还原主题设置
+  restoreThemeSettings();
+  
+  // 检测设备类型
+  const isAndroid = /Android/.test(navigator.userAgent);
+  
   // 清除初始化标记
   window._appInitializing = false;
   
@@ -1002,6 +1015,28 @@ const updateBackgroundId = (id) => {
   currentBgId.value = id;
   localStorage.setItem('currentBackgroundId', id);
 };
+
+// 恢复主题设置
+function restoreThemeSettings() {
+  try {
+    // 从本地存储加载主题设置
+    const theme = localStorage.getItem('themeMode');
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark-theme');
+      document.documentElement.classList.remove('light-theme');
+    } else if (theme === 'light') {
+      document.documentElement.classList.add('light-theme');
+      document.documentElement.classList.remove('dark-theme');
+    } else {
+      // 默认深色主题
+      document.documentElement.classList.add('dark-theme');
+      document.documentElement.classList.remove('light-theme');
+    }
+    console.log(`[App.vue] 恢复主题设置: ${theme || '默认深色'}`);
+  } catch (error) {
+    console.error('[App.vue] 恢复主题设置失败:', error);
+  }
+}
 </script>
 
 <template>

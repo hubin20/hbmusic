@@ -366,7 +366,11 @@ export const getCachedSongUrl = async (songId) => {
   // 先尝试从内存缓存获取
   if (cachedData.songs[songId] && cachedData.songs[songId].details) {
     // console.log(`[DataCache] 使用内存缓存的歌曲详情: ID ${songId}`, cachedData.songs[songId].details);
-    return cachedData.songs[songId].details;
+    // 确保返回的对象中包含时间戳
+    return {
+      ...cachedData.songs[songId].details,
+      timestamp: cachedData.songs[songId].timestamp
+    };
   }
 
   // 从IndexedDB获取
@@ -381,7 +385,11 @@ export const getCachedSongUrl = async (songId) => {
       cachedData.songs[songId].timestamp = result.timestamp;
 
       // console.log(`[DataCache] 使用IndexedDB缓存的歌曲详情: ID ${songId}`, result.details);
-      return result.details;
+      // 确保返回的对象中包含时间戳
+      return {
+        ...result.details,
+        timestamp: result.timestamp
+      };
     }
   } catch (error) {
     console.error(`[DataCache] 获取缓存的歌曲详情失败:`, error);
@@ -546,4 +554,31 @@ export const clearAllCache = async () => {
   }
 
   console.log(`[DataCache] 清除所有缓存数据完成`);
+};
+
+/**
+ * 重置所有最后更新时间标记
+ * 当应用启动时调用，确保能正确检测首次加载
+ */
+export const resetLastUpdateTime = () => {
+  try {
+    // 清除所有与最后更新时间相关的localStorage项
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('last_update_') || key.includes('_timestamp'))) {
+        keysToRemove.push(key);
+      }
+    }
+
+    // 分开移除以避免在循环中修改集合
+    keysToRemove.forEach(key => {
+      localStorage.removeItem(key);
+      console.log(`[DataCache] 重置最后更新时间: ${key}`);
+    });
+
+    console.log(`[DataCache] 已重置${keysToRemove.length}个时间标记`);
+  } catch (error) {
+    console.error('[DataCache] 重置最后更新时间失败:', error);
+  }
 }; 

@@ -58,7 +58,6 @@
            webkit-playsinline="true"
            x-webkit-airplay="allow"
            disablePictureInPicture
-           autoplay
     ></audio>
   </div>
 </template>
@@ -167,8 +166,8 @@ onMounted(() => {
     }
     
     // 为音频元素添加keepalive特性（如果浏览器支持）
-    audioPlayer.value.setAttribute('x-webkit-airplay', 'allow');
-    audioPlayer.value.setAttribute('webkit-playsinline', 'true');
+      audioPlayer.value.setAttribute('x-webkit-airplay', 'allow');
+      audioPlayer.value.setAttribute('webkit-playsinline', 'true');
     
     // 防止系统自动暂停音频
     audioPlayer.value.addEventListener('pause', (event) => {
@@ -391,6 +390,17 @@ const onLoadedMetadata = () => {
     const savedPlaybackSpeed = localStorage.getItem('playbackSpeed');
     if (savedPlaybackSpeed) {
       audioPlayer.value.playbackRate = parseFloat(savedPlaybackSpeed);
+    }
+
+    // 检查是否是应用刚启动
+    const isAppJustStarted = !localStorage.getItem('app_has_started');
+    if (isAppJustStarted) {
+      // 标记应用已启动，防止下次被认为是刚启动
+      localStorage.setItem('app_has_started', 'true');
+      console.log('[PlayerControls] 应用刚启动，不自动播放音乐');
+      // 确保播放状态为暂停
+      playerStore.isPlaying = false;
+      return;
     }
 
     // 只有当不在加载新歌曲状态时才播放

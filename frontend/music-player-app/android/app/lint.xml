@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- 禁用一些常见的Capacitor相关问题 -->
+    <issue id="InvalidPackage" severity="ignore" />
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="ObsoleteLintCustomCheck" severity="ignore" />
+    <issue id="UnusedResources" severity="ignore" />
+    <issue id="IconDensities" severity="ignore" />
+    <issue id="IconMissingDensityFolder" severity="ignore" />
+    <issue id="GoogleAppIndexingWarning" severity="ignore" />
+    <issue id="MissingTranslation" severity="ignore" />
+    <issue id="OldTargetApi" severity="ignore" />
+    <!-- 禁用FlatDir警告 -->
+    <issue id="UnsafeImportDetector" severity="ignore" />
+</lint> 

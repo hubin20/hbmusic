@@ -50,8 +50,35 @@ export const addToFavorites = (type, item) => {
       return true; // 已经收藏过了
     }
 
+    // 特殊处理歌曲，确保保存必要的播放信息
+    let itemToSave = { ...item }; // 创建副本，避免修改原对象
+
+    if (type.toUpperCase() === 'SONGS') {
+      // 确保保存关键的播放信息字段
+      // 即使这些字段在item中不存在，也预留占位，确保结构一致
+      const keysToPreserve = [
+        'id', 'name', 'artist', 'album', 'albumId', 'albumArt',
+        'duration', 'isFromKw', 'url', 'directPlayUrl', 'isFallbackDirect'
+      ];
+
+      // 使用上述字段创建一个新对象
+      const enhancedItem = {};
+      keysToPreserve.forEach(key => {
+        if (item[key] !== undefined) {
+          enhancedItem[key] = item[key];
+        }
+      });
+
+      // 添加时间戳，用于后续判断是否需要刷新
+      enhancedItem.favoritedAt = Date.now();
+
+      itemToSave = enhancedItem;
+
+      console.log(`[FavoritesService] 收藏歌曲: ${item.name}, ID: ${item.id}`);
+    }
+
     // 添加到收藏
-    favorites.push(item);
+    favorites.push(itemToSave);
     localStorage.setItem(key, JSON.stringify(favorites));
     return true;
   } catch (err) {

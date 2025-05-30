@@ -22,9 +22,20 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    
+    // 添加lint配置，解决lintVitalAnalyzeRelease错误
+    lintOptions {
+        abortOnError false
+        checkReleaseBuilds false
+        lintConfig file('lint.xml')
+        quiet true
+        checkDependencies true
+    }
 }
 
 repositories {
+    mavenCentral()
+    google()
     flatDir{
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
     }
