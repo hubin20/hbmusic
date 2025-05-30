@@ -1,0 +1,2700 @@
+import { defineStore } from 'pinia';
+import axios from 'axios';
+import { getPlayerState } from './persistedState';
+import * as dataCache from './dataCache';
+
+// 从环境变量中获取 API 地址
+const API_URL = import.meta.env.VITE_BACKEND_API_URL || 'https://api.931125.xyz';
+const PLAYBACK_MODES = ['sequential', 'single', 'shuffle']; // 顺序, 单曲, 随机
+const MAIN_API_BASE = import.meta.env.VITE_MAIN_API_BASE || 'https://api.931125.xyz'; // 主API基础URL
+const FALLBACK_API_BASE = import.meta.env.VITE_FALLBACK_API_BASE || 'https://kw-api.cenguigui.cn'; // 备用API基础URL
+
+// 是否使用ID前缀来区分歌曲来源
+const USE_ID_PREFIX = import.meta.env.VITE_USE_ID_PREFIX === 'true';
+const MAIN_ID_PREFIX = import.meta.env.VITE_MAIN_ID_PREFIX || 'main_';
+const KW_ID_PREFIX = import.meta.env.VITE_KW_ID_PREFIX || 'kw_';
+
+// 默认专辑图片URL
+const DEFAULT_ALBUM_ART = 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg';
+
+// 从localStorage加载保存的播放状态
+const savedState = getPlayerState();
+
+export const usePlayerStore = defineStore('player', {
+  state: () => ({
+    playlist: [], // 当前播放列表，歌曲对象会包含 preloadedUrl
+    currentSong: null, // 当前播放的歌曲对象 { id, name, artist, albumArt, url, duration, ... }
+    currentSongIndex: savedState?.currentSongIndex || -1, // 当前歌曲在播放列表中的索引
+    isPlaying: false, // 默认为false，会在恢复时更新
+    currentTime: savedState?.currentTime || 0, // 当前播放时间（秒）
+    volume: savedState?.volume || 0.5, // 音量 (0 到 1)
+    showLyricsView: false, // 是否显示歌词界面
+    playbackMode: savedState?.playbackMode || PLAYBACK_MODES[0], // 播放模式
+    showPlaybackModeToast: false, // 是否显示播放模式提示
+    toastMessage: '', // 提示框消息
+    // 歌词相关 state
+    currentLyrics: [], // 解析后的歌词对象数组: [{ time: number, text: string }]
+    translatedLyrics: [], // 解析后的翻译歌词对象数组
+    currentLyricIndex: -1, // 当前高亮歌词行的索引
+    showTranslatedLyrics: false, // 是否显示翻译歌词
+    isLoadingLyrics: false, // 是否正在加载歌词
+    _currentLoadingSongId: null, // 当前正在加载歌词的歌曲ID，用于防止重复请求
+    _hasPreloadedBeforeEnd: false, // 用于跟踪歌曲是否已经在接近结束时预加载过
+    lastSearchKeyword: null, // 用于存储最后一次搜索的关键词
+    isDataLoaded: false, // 标记是否已加载数据
+
+    // 新增状态：用于双API搜索
+    isSearching: false, // 是否正在搜索中
+    mainApiOffset: 0, // 主API的当前偏移量
+    fallbackApiOffset: 0, // 备用API的当前偏移量
+    mainApiHasMore: true, // 主API是否还有更多结果
+    fallbackApiHasMore: true, // 备用API是否还有更多结果
+    mainApiSongs: [], // 主API返回的歌曲列表(用于去重)
+    fallbackApiSongs: [], // 备用API返回的歌曲列表(用于去重)
+    combinedSongIds: new Set(), // 用于去重的歌曲ID集合
+
+    // 新增状态：用于解决歌曲切换时的播放问题
+    isLoadingNewSong: false, // 是否正在加载新歌曲
+  }),
+  getters: {
+    /**
+     * 获取当前歌曲的总时长。
+     * @param {object} state - Pinia state。
+     * @returns {number} 歌曲时长（秒），如果歌曲未加载则为 0。
+     */
+    currentSongDuration(state) {
+      if (!state.currentSong || !state.currentSong.duration) return 0;
+
+      // 统一处理：currentSong.duration 现在总是存储毫秒，需要转换为秒
+      return state.currentSong.duration / 1000;
+    },
+    /**
+     * 获取格式化后的当前播放时间 (m:ss)。
+     * @param {object} state - Pinia state。
+     * @returns {string} 格式化后的时间字符串。
+     */
+    formattedCurrentTime(state) {
+      const minutes = Math.floor(state.currentTime / 60);
+      const seconds = Math.floor(state.currentTime % 60).toString().padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    },
+    /**
+     * 获取格式化后的歌曲总时长 (m:ss)。
+     * @param {object} state - Pinia state。
+     * @returns {string} 格式化后的时间字符串。
+     */
+    formattedTotalDuration(state) {
+      if (!state.currentSong || !state.currentSong.duration) return '0:00';
+
+      // 统一处理：currentSong.duration 现在总是存储毫秒，需要转换为秒
+      const durationInSeconds = state.currentSong.duration / 1000;
+      const minutes = Math.floor(durationInSeconds / 60);
+      const seconds = Math.floor(durationInSeconds % 60).toString().padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    },
+    currentPlaybackModeText(state) {
+      switch (state.playbackMode) {
+        case 'sequential': return '顺序播放';
+        case 'single': return '单曲循环';
+        case 'shuffle': return '随机播放';
+        default: return '未知模式';
+      }
+    },
+    hasLyrics(state) {
+      return state.currentLyrics && state.currentLyrics.length > 0;
+    },
+  },
+  actions: {
+    /**
+     * 将酷我API返回的URL中的level=exhigh替换为level=lossless
+     * @param {string} url - 原始URL
+     * @returns {string} - 替换后的URL
+     * @private
+     */
+    _convertExhighToLossless(url) {
+      if (!url) return url;
+
+      // 替换level=exhigh为level=lossless
+      if (url.includes('level=exhigh')) {
+        return url.replace('level=exhigh', 'level=lossless');
+      }
+
+      return url;
+    },
+
+    /**
+     * 格式化备用API (酷我) 返回的歌曲数据
+     * @param {Object} song - 备用API返回的歌曲对象
+     * @returns {Object} 格式化后的歌曲对象，与主API格式一致
+     */
+    _formatFallbackApiSong(song) {
+      if (!song) return null;
+
+      // 提取歌手名称
+      let artistName = song.artist || '未知艺术家';
+
+      // 处理ID，添加前缀
+      let songId = song.rid || song.id;
+      if (USE_ID_PREFIX && songId) {
+        songId = `${KW_ID_PREFIX}${songId}`;
+      }
+
+      // 确保专辑封面URL可用
+      let albumArt = song.pic || song.albumpic || '';
+      // 如果没有封面或封面URL不可用，使用默认封面
+      if (!albumArt || albumArt.trim() === '') {
+        albumArt = DEFAULT_ALBUM_ART;
+      }
+
+      // 直接使用API返回的url字段（如果有），并替换level=exhigh为level=lossless
+      let url = null;
+      if (song.url && typeof song.url === 'string' && song.url.startsWith('http')) {
+        url = this._convertExhighToLossless(song.url);
+        //// // console.log(`[PlayerStore] _formatFallbackApiSong: 使用API返回的直接URL: ${url.substring(0, 100)}...`);
+      }
+
+      // 构建格式化的歌曲对象
+      return {
+        id: songId, // 使用添加了前缀的ID
+        rid: song.rid || song.id, // 保存原始RID，用于后续获取详情
+        name: song.name || '未知歌曲',
+        artist: artistName,
+        album: song.album || '未知专辑',
+        albumId: null, // 备用API可能没有专辑ID
+        albumArt: albumArt,
+        duration: song.duration || 0, // 保持酷我API的时长单位为秒
+        lyricist: artistName, // 假设作词者是歌手
+        composer: artistName, // 假设作曲者是歌手
+        isFromKw: true, // 标记来源为备用API
+        originalData: song, // 保留原始数据，以备后用
+        url: url, // 保留原始URL字段
+        lrcUrl: song.lrc ? this._convertExhighToLossless(song.lrc) : null // 保存歌词URL并替换level
+      };
+    },
+    /**
+     * 设置播放列表
+     * @param {Array} songs - 歌曲数组
+     * @param {boolean} replaceExisting - 是否替换现有播放列表，默认为true
+     * @param {boolean} fromCache - 是否来自缓存，用于避免再次缓存
+     */
+    setPlaylist(songs, replaceExisting = true, fromCache = false) {
+      // 格式化歌曲数据，确保有必要的字段
+      const formattedSongs = songs.map(song => ({
+        ...song,
+        // 确保有专辑封面（如果没有，使用默认图片）
+        albumArt: song.albumArt || 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg',
+        // 预加载URL初始为null
+        preloadedUrl: null
+      }));
+
+      if (replaceExisting) {
+        const previouslyPlayingSong = this.currentSong; // 保存替换前的 currentSong
+        this.playlist = formattedSongs;
+
+        if (previouslyPlayingSong) {
+          const newIndexOfPreviouslyPlayingSong = this.playlist.findIndex(song => song.id === previouslyPlayingSong.id);
+          if (newIndexOfPreviouslyPlayingSong !== -1) {
+            // 原来播放/选中的歌曲仍在新列表中
+            this.currentSongIndex = newIndexOfPreviouslyPlayingSong;
+            // this.currentSong 保持不变，因为它就是 previouslyPlayingSong
+          } else {
+            // 原来播放/选中的歌曲已不在新列表中
+            this.currentSongIndex = -1; // 清除高亮索引
+            // this.currentSong 和 this.isPlaying 保持不变，允许当前歌曲播完
+            // 如果希望停止播放并清除currentSong，可以在这里添加逻辑
+          }
+        } else {
+          // 替换列表时，原本就没有歌曲在播放/选中
+          this.currentSongIndex = this.playlist.length > 0 ? 0 : -1;
+          this.currentSong = this.playlist.length > 0 ? this.playlist[0] : null;
+        }
+      } else {
+        // 如果播放列表为空，直接设置
+        if (this.playlist.length === 0) {
+          this.playlist = formattedSongs;
+        } else {
+          // 保留当前播放列表中的歌曲，将新歌曲添加到列表末尾
+          // 避免重复添加，通过ID检查
+          const existingIds = new Set(this.playlist.map(s => s.id));
+          const uniqueNewSongs = formattedSongs.filter(s => !existingIds.has(s.id));
+          this.playlist = [...this.playlist, ...uniqueNewSongs];
+        }
+      }
+
+      // 如果当前没有选中的歌曲但列表不为空，预设第一首
+      if (!replaceExisting && this.currentSongIndex === -1 && this.playlist.length > 0) {
+        this.currentSongIndex = 0;
+        this.currentSong = this.playlist[0];
+      }
+
+      // 预加载当前歌曲的下一首
+      if (this.playlist.length > 1) {
+        this.preloadNextSong();
+      }
+
+      // 标记数据已加载
+      this.isDataLoaded = true;
+
+      // 如果不是来自缓存，则缓存歌曲列表
+      if (!fromCache && this.lastSearchKeyword) {
+        // 缓存搜索结果
+        dataCache.cacheSearchResults(this.lastSearchKeyword, formattedSongs);
+      } else if (!fromCache && !this.lastSearchKeyword) {
+        // 缓存初始歌曲列表
+        dataCache.cacheInitialSongs(formattedSongs);
+      }
+    },
+
+    /**
+     * 内部方法：根据歌曲对象获取歌曲URL和时长，支持重试。
+     * 根据歌曲的 isFromKw 属性决定使用哪个API获取URL。
+     * @param {Object} songObject - 歌曲对象。
+     * @param {number} retryCount - 当前重试次数。
+     * @param {number} maxRetries - 最大重试次数。
+     * @returns {Promise<object|null>} 包含 url 和 duration 的对象，或 null。
+     */
+    async _fetchSongUrl(songObject, retryCount = 0, maxRetries = 2) {
+      if (!songObject || typeof songObject.id === 'undefined') {
+        console.error("[PlayerStore] 歌曲对象或歌曲ID缺失，无法获取URL");
+        return null;
+      }
+
+      // 如果歌曲来自备用API，直接使用备用API获取URL
+      if (songObject.isFromKw) {
+        return this._fetchSongUrlFromFallbackApi(songObject);
+      }
+
+      const songId = songObject.id;
+      const songName = songObject.name || '未知歌曲';
+      const retryDelay = 500;
+
+      // 首先检查缓存
+      const cachedSongDetails = dataCache.getCachedSongUrl(songId);
+      if (cachedSongDetails) {
+        return cachedSongDetails;
+      }
+
+      // 处理ID前缀，提取纯ID
+      let cleanId = songId;
+      if (USE_ID_PREFIX && typeof songId === 'string' && songId.startsWith(MAIN_ID_PREFIX)) {
+        cleanId = songId.substring(MAIN_ID_PREFIX.length);
+      }
+
+      // 打印主API请求URL
+      const mainApiUrl = `${MAIN_API_BASE}/song/url?id=${cleanId}`;
+      // // console.log(`[PlayerStore] 主API请求URL: ${mainApiUrl}`);
+
+      try {
+        const response = await axios.get(`${MAIN_API_BASE}/song/url`, {
+          params: { id: cleanId }
+        });
+
+        if (response.data && response.data.data && response.data.data[0] && response.data.data[0].url) {
+          const songData = response.data.data[0];
+
+          const songDetails = {
+            url: songData.url,
+            duration: (songData.time || 0), // 直接使用毫秒
+            isFallbackDirect: false,
+            directPlayUrl: null,
+            id: songId
+          };
+          dataCache.cacheSongUrl(songId, songDetails);
+          return songDetails;
+        } else {
+          console.warn(`[PlayerStore] 主API返回的数据中没有有效的URL, 歌曲ID: ${cleanId}, 响应数据:`, JSON.stringify(response.data));
+
+          // 检测到灰色歌曲（网易云没有版权的歌曲），直接尝试从备用API获取
+          // // console.log(`[PlayerStore] 检测到灰色歌曲，直接尝试从备用API通过歌名获取: ${songObject.name}`);
+          const fallbackDetails = await this._fetchSongUrlFromFallbackApi(songObject);
+          if (fallbackDetails) {
+            return fallbackDetails;
+          }
+
+          throw new Error('主API未返回有效歌曲URL数据');
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] 主API获取歌曲链接时出错: ID ${songId}, 重试次数: ${retryCount}/${maxRetries}, 错误: `, error);
+
+        // 对于404错误或网络错误，直接尝试备用API，不再重试主API
+        if (error.response && (error.response.status === 404 || error.response.status === 403)) {
+          // // console.log(`[PlayerStore] 主API返回${error.response.status}错误，直接尝试备用API`);
+          const fallbackDetails = await this._fetchSongUrlFromFallbackApi(songObject);
+          if (fallbackDetails) {
+            return fallbackDetails;
+          }
+        }
+
+        // 对于其他错误，也直接尝试从备用API获取，不进行重试
+        // // console.log(`[PlayerStore] 主API获取失败，直接尝试从备用API通过歌名获取: ${songObject.name}`);
+        const fallbackDetails = await this._fetchSongUrlFromFallbackApi(songObject);
+        if (fallbackDetails) {
+          return fallbackDetails;
+        }
+
+        // 只有在备用API也失败的情况下，才考虑重试主API
+        if (retryCount < maxRetries) {
+          // // console.log(`[PlayerStore] 备用API也失败，将在${retryDelay}ms后进行第${retryCount + 1}次重试获取歌曲URL`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          return this._fetchSongUrl(songObject, retryCount + 1, maxRetries);
+        } else {
+          // // console.log(`[PlayerStore] 主API重试${maxRetries}次后仍然失败，且备用API也失败，无法获取歌曲URL`);
+          return null;
+        }
+      }
+    },
+
+    /**
+     * 内部方法：从备用 API 获取歌曲 URL。
+     * 如果歌曲来自备用API (isFromKw=true)，则直接使用rid获取URL。
+     * 否则，先通过歌名搜索获取备用API的歌曲ID(rid)，然后用rid获取URL。
+     * @param {object} originalSongObject - 原始歌曲对象 (包含主API的id, name, artist等)。
+     * @returns {Promise<object|null>} 包含 url 和 duration 的对象，或 null。
+     */
+    async _fetchSongUrlFromFallbackApi(originalSongObject) {
+      if (!originalSongObject || typeof originalSongObject.id === 'undefined') {
+        console.error('[PlayerStore] 备用API: originalSongObject 无效或缺少ID');
+        return null;
+      }
+
+      let kwRid = null;
+      const rawId = String(originalSongObject.id);
+
+      // 首先尝试从ID中提取kwRid
+      if (USE_ID_PREFIX && typeof rawId === 'string') {
+        if (rawId.startsWith(KW_ID_PREFIX)) {
+          kwRid = rawId.substring(KW_ID_PREFIX.length);
+        } else if (rawId.startsWith('kw-')) {
+          kwRid = rawId.substring(3);
+        }
+        // 注意：不再从 MAIN_ID_PREFIX 中提取并假设它是kwRid，因为这通常是错误的
+      } else if (/^\d+$/.test(rawId) && originalSongObject.isFromKw) {
+        // 如果 originalSongObject 明确来自酷我，并且ID是纯数字，则直接使用
+        kwRid = rawId;
+      }
+
+      // 如果通过ID成功提取了kwRid，并且是纯数字，则尝试直接获取
+      if (kwRid && /^\d+$/.test(kwRid)) {
+        //// // console.log(`[PlayerStore] 备用API: 尝试使用提取的 kwRid ${kwRid} 获取歌曲详情`);
+        const songDetailsById = await this._fetchKwSongDetailsByRid(kwRid, originalSongObject);
+        if (songDetailsById && songDetailsById.url) {
+          dataCache.cacheSongUrl(originalSongObject.id, songDetailsById);
+          return songDetailsById;
+        }
+        //// // console.log(`[PlayerStore] 备用API: 使用 kwRid ${kwRid} 未能获取到有效歌曲详情或URL。`);
+      }
+
+      // 如果通过ID未能获取，或者没有有效的kwRid，则尝试通过歌名和歌手名搜索
+      // // console.log(`[PlayerStore] 备用API: 尝试通过歌名 "${originalSongObject.name}" 和歌手 "${originalSongObject.artist}" 搜索`);
+      // // console.log("[PlayerStore] 备用API: originalSongObject:", JSON.stringify(originalSongObject).substring(0, 500)); // 打印部分对象结构
+
+      // 检查歌曲名是否存在
+      if (!originalSongObject.name) {
+        console.warn('[PlayerStore] 备用API: 歌曲名缺失，无法进行搜索。');
+        return null;
+      }
+
+      try {
+        // 构建搜索关键词，即使歌手名缺失也能搜索
+        let searchKeywords = originalSongObject.name;
+
+        // 尝试获取有效的歌手名
+        let artistName = null;
+        if (originalSongObject.artist && originalSongObject.artist !== 'undefined') {
+          artistName = originalSongObject.artist;
+        } else if (originalSongObject.ar && originalSongObject.ar.length > 0 && originalSongObject.ar[0].name) {
+          // 尝试从网易云歌曲对象的ar数组中获取歌手名
+          artistName = originalSongObject.ar[0].name;
+        } else if (originalSongObject.artists && originalSongObject.artists.length > 0 && originalSongObject.artists[0].name) {
+          // 尝试从网易云歌曲对象的artists数组中获取歌手名
+          artistName = originalSongObject.artists[0].name;
+        }
+
+        // 如果有有效的歌手名，添加到搜索关键词中
+        if (artistName) {
+          searchKeywords = `${originalSongObject.name}${artistName}`;
+          // // console.log(`[PlayerStore] 备用API: 使用歌曲名和歌手名搜索(无空格): ${searchKeywords}`);
+        } else {
+          // // console.log(`[PlayerStore] 备用API: 歌手名缺失或无效，仅使用歌曲名进行搜索: ${searchKeywords}`);
+        }
+
+        // 打印完整的搜索URL
+        const fullSearchUrl = `${FALLBACK_API_BASE}?name=${encodeURIComponent(searchKeywords)}&level=lossless`;
+        // // console.log(`[PlayerStore] 备用API: 完整搜索URL: ${fullSearchUrl}`);
+
+        // 使用简单的搜索关键词
+        const searchResults = await this._searchSongsFromFallbackApi(searchKeywords);
+
+        // // console.log(`[PlayerStore] 备用API: 搜索结果数量: ${searchResults ? searchResults.length : 0}`);
+        if (searchResults && searchResults.length > 0) {
+          // // console.log(`[PlayerStore] 备用API: 搜索结果第一首: ${JSON.stringify(searchResults[0])}`);
+        }
+
+        if (searchResults && searchResults.length > 0) {
+          // 如果有多个搜索结果，尝试找到最匹配的那一首
+          let bestMatch = searchResults[0]; // 默认使用第一个结果
+          let bestScore = 0;
+
+          // 对每个搜索结果进行评分，找出最匹配的
+          for (const result of searchResults) {
+            let score = 0;
+
+            // 歌曲名完全匹配加高分
+            if (result.name.toLowerCase() === originalSongObject.name.toLowerCase()) {
+              score += 10;
+            }
+            // 歌曲名包含原始歌曲名加分
+            else if (result.name.toLowerCase().includes(originalSongObject.name.toLowerCase())) {
+              score += 5;
+            }
+
+            // 如果有歌手名，匹配歌手名
+            if (artistName && result.artist) {
+              // 歌手名完全匹配加高分
+              if (result.artist.toLowerCase() === artistName.toLowerCase()) {
+                score += 8;
+              }
+              // 歌手名包含原始歌手名加分
+              else if (result.artist.toLowerCase().includes(artistName.toLowerCase()) ||
+                artistName.toLowerCase().includes(result.artist.toLowerCase())) {
+                score += 4;
+              }
+            }
+
+            // 更新最佳匹配
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = result;
+            }
+          }
+
+          // // console.log(`[PlayerStore] 备用API: 找到最佳匹配歌曲，歌名: ${bestMatch.name}, 歌手: ${bestMatch.artist}, 匹配分数: ${bestScore}`);
+
+          // 1. 首先尝试直接使用搜索结果中的URL字段
+          if (bestMatch.url) {
+            // // console.log(`[PlayerStore] 备用API: 直接使用搜索结果中的URL字段: ${bestMatch.url.substring(0, 100)}...`);
+
+            const songDetails = {
+              url: this._convertExhighToLossless(bestMatch.url),
+              directPlayUrl: this._convertExhighToLossless(bestMatch.url),
+              isFallbackDirect: true,
+              isFromKw: true,
+              duration: bestMatch.duration || 0,
+              name: bestMatch.name,
+              artist: bestMatch.artist,
+              albumArt: bestMatch.albumArt,
+              id: originalSongObject.id
+            };
+
+            // 缓存结果
+            dataCache.cacheSongUrl(originalSongObject.id, songDetails);
+            return songDetails;
+          }
+
+          // 2. 如果没有直接的URL字段，尝试使用RID构建URL
+          const foundKwRid = bestMatch.rid || bestMatch.id;
+          if (foundKwRid && /^\d+$/.test(String(foundKwRid))) {
+            // // console.log(`[PlayerStore] 备用API: 使用搜索结果的RID构建播放链接: ${foundKwRid}`);
+
+            // 直接构建播放链接
+            const mp3PlayUrl = `${FALLBACK_API_BASE}?id=${foundKwRid}&type=song&level=lossless&format=flac`;
+
+            const songDetails = {
+              url: mp3PlayUrl,
+              directPlayUrl: mp3PlayUrl,
+              isFallbackDirect: true,
+              isFromKw: true,
+              duration: bestMatch.duration || 0,
+              name: bestMatch.name,
+              artist: bestMatch.artist,
+              albumArt: bestMatch.albumArt,
+              id: originalSongObject.id
+            };
+
+            // 缓存结果
+            dataCache.cacheSongUrl(originalSongObject.id, songDetails);
+            return songDetails;
+          }
+        } else {
+          // // console.log(`[PlayerStore] 备用API: 通过歌名${originalSongObject.artist ? "和歌手名" : ""}未能搜索到匹配的酷我歌曲。`);
+        }
+      } catch (searchError) {
+        console.error('[PlayerStore] 备用API: 通过歌名和歌手名搜索时出错:', searchError);
+      }
+
+      console.warn(`[PlayerStore] 备用API: 最终未能通过ID或搜索获取到 ${originalSongObject.name} 的播放链接。`);
+      return null;
+    },
+
+    /**
+     * 辅助方法：根据酷我RID获取歌曲详情和播放链接
+     * @param {string} kwRid - 酷我歌曲的纯数字ID
+     * @param {object} originalSongObject - 用于获取初始信息和缓存键的原始歌曲对象
+     * @param {object|null} searchedSongData - (可选) 通过搜索获取到的歌曲数据，用于补充信息
+     * @returns {Promise<object|null>} 包含 url, duration 等的对象，或 null
+     */
+    async _fetchKwSongDetailsByRid(kwRid, originalSongObject, searchedSongData = null) {
+      // 构建详细URL
+      const mp3Url = `${FALLBACK_API_BASE}?id=${kwRid}&type=song&level=lossless&format=flac`;
+      const flacUrl = `${FALLBACK_API_BASE}?id=${kwRid}&type=song&level=lossless&format=flac`;
+      const detailUrl = `${FALLBACK_API_BASE}?id=${kwRid}&type=song&level=lossless`;
+
+      // // // console.log(`[PlayerStore] _fetchKwSongDetailsByRid: MP3播放链接 ${mp3Url}`);
+      // // // console.log(`[PlayerStore] _fetchKwSongDetailsByRid: FLAC播放链接 ${flacUrl}`);
+      //// // console.log(`[PlayerStore] _fetchKwSongDetailsByRid: 详情API ${detailUrl}`);
+
+      // 根据截图中的URL格式构建播放链接
+      const mp3PlayUrl = `${FALLBACK_API_BASE}?id=${kwRid}&type=song&level=lossless&format=flac`;
+      const flacPlayUrl = `${FALLBACK_API_BASE}?id=${kwRid}&type=song&level=lossless&format=flac`;
+
+      // 优先使用 searchedSongData (如果提供)，否则使用 originalSongObject
+      const baseSongInfo = searchedSongData || originalSongObject;
+
+      let songDetailsToReturn = {
+        url: mp3PlayUrl,
+        directPlayUrl: mp3PlayUrl,
+        flacUrl: flacPlayUrl,
+        isFallbackDirect: true,
+        isFromKw: true,
+        duration: baseSongInfo.duration || 0,
+        name: baseSongInfo.name || '未知歌曲',
+        artist: baseSongInfo.artist || '未知艺术家',
+        albumArt: baseSongInfo.albumArt || (searchedSongData ? searchedSongData.albumArt : originalSongObject.albumArt),
+        // 使用 originalSongObject.id 进行后续的播放器内部逻辑和缓存键
+        id: originalSongObject.id
+      };
+
+      try {
+        // 获取歌曲详情，使用正确的API格式
+        const songInfoResponse = await axios.get(FALLBACK_API_BASE, {
+          params: {
+            id: kwRid,
+            type: 'song',
+            level: 'lossless' // 修改为lossless无损音质
+            // 移除format参数，使用API默认格式
+          },
+        });
+
+        if (songInfoResponse.data && songInfoResponse.data.code === 200 && songInfoResponse.data.data) {
+          const kwApiData = songInfoResponse.data.data;
+
+          songDetailsToReturn.duration = parseInt(kwApiData.duration, 10) || songDetailsToReturn.duration;
+          songDetailsToReturn.name = kwApiData.name || songDetailsToReturn.name;
+          songDetailsToReturn.artist = kwApiData.artist || songDetailsToReturn.artist || '未知艺术家';
+
+          if (kwApiData.pic && kwApiData.pic !== 'NO_PIC') {
+            songDetailsToReturn.albumArt = kwApiData.pic;
+          } else if (kwApiData.pic === 'NO_PIC') {
+            // 保留已有的 albumArt (可能来自 originalSongObject 或 searchedSongData)
+            // // console.log(`[PlayerStore] _fetchKwSongDetailsByRid: 酷我API返回NO_PIC，保留图片: ${songDetailsToReturn.albumArt}`);
+          }
+
+          // 如果API返回了直接的url字段，使用它
+          if (kwApiData.url) {
+            songDetailsToReturn.url = this._convertExhighToLossless(kwApiData.url);
+            songDetailsToReturn.directPlayUrl = this._convertExhighToLossless(kwApiData.url);
+            // // // console.log(`[PlayerStore] _fetchKwSongDetailsByRid: 使用API返回的直接URL: ${kwApiData.url.substring(0, 100)}...`);
+          }
+
+          // 如果当前歌曲正在播放且ID匹配，则更新播放器中的歌曲信息
+          if (this.currentSong && this.currentSong.id === originalSongObject.id) {
+            this.currentSong.albumArt = songDetailsToReturn.albumArt;
+            this.currentSong.name = songDetailsToReturn.name;
+            this.currentSong.artist = songDetailsToReturn.artist;
+            this.currentSong.duration = songDetailsToReturn.duration;
+          }
+          return songDetailsToReturn;
+        }
+      } catch (infoError) {
+        console.error(`[PlayerStore] _fetchKwSongDetailsByRid: 获取酷我歌曲详情(RID: ${kwRid})时出错:`, infoError);
+      }
+      return songDetailsToReturn; // 即使获取详情失败，也返回基本的播放链接
+    },
+
+    /**
+     * 预加载下一首歌曲的URL
+     * @param {number} specificIndex - 指定要预加载的歌曲索引，如果不提供则自动计算下一首
+     */
+    async preloadNextSong(specificIndex = null) {
+      // 如果没有播放列表或只有一首歌，不需要预加载
+      if (!this.playlist || this.playlist.length <= 1) {
+        return;
+      }
+
+      // 如果当前没有播放歌曲，也无法预加载
+      if (this.currentSongIndex === -1) {
+        return;
+      }
+
+      // 确定要预加载的歌曲索引
+      let nextIndex;
+      if (specificIndex !== null && specificIndex >= 0 && specificIndex < this.playlist.length) {
+        nextIndex = specificIndex;
+      } else {
+        // 根据播放模式确定下一首歌
+        if (this.playbackMode === 'single') {
+          // 单曲循环模式下，预加载当前歌曲
+          nextIndex = this.currentSongIndex;
+        } else if (this.playbackMode === 'shuffle') {
+          // 随机模式下，随机选择一首歌（除了当前歌曲）
+          if (this.playlist.length > 1) {
+            let randomIndex;
+            do {
+              randomIndex = Math.floor(Math.random() * this.playlist.length);
+            } while (randomIndex === this.currentSongIndex);
+            nextIndex = randomIndex;
+          } else {
+            nextIndex = 0;
+          }
+        } else {
+          // 顺序播放模式下，预加载下一首歌
+          nextIndex = (this.currentSongIndex + 1) % this.playlist.length;
+        }
+      }
+
+      // 检查是否已经预加载过
+      if (this.playlist[nextIndex].preloadedUrl) {
+        return;
+      }
+
+      try {
+        // 获取歌曲URL
+        const nextSong = this.playlist[nextIndex];
+        const songDetails = await this._fetchSongUrl(nextSong);
+
+        if (songDetails) {
+          // 确定预加载的URL
+          let preloadUrl = null;
+
+          if (songDetails.isFallbackDirect && songDetails.directPlayUrl) {
+            // 如果是备用API的直接播放URL
+            preloadUrl = songDetails.directPlayUrl;
+          } else if (songDetails.url) {
+            // 如果是常规URL
+            preloadUrl = songDetails.url;
+          }
+
+          if (preloadUrl) {
+            // 更新播放列表中的预加载URL
+            this.playlist[nextIndex].preloadedUrl = preloadUrl;
+
+            // 如果是备用API的歌曲，保存相关标记
+            if (songDetails.isFallbackDirect) {
+              this.playlist[nextIndex].isFallbackDirect = true;
+              this.playlist[nextIndex].directPlayUrl = songDetails.directPlayUrl;
+            }
+
+            // 可选：创建一个隐藏的audio元素来预加载
+            // const preloadAudio = new Audio();
+            // preloadAudio.src = preloadUrl;
+            // preloadAudio.preload = 'auto';
+            // preloadAudio.load();
+          }
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] 预加载歌曲时出错:`, error);
+      }
+    },
+
+    /**
+     * 解析LRC歌词字符串，支持处理网易云的逐字歌词格式。
+     * @param {string} lrcString - LRC或YRC格式的歌词字符串。
+     * @returns {Array<object>} 解析后的歌词对象数组。
+     */
+    parseLrc(lrcString) {
+      if (!lrcString) return [];
+      const lines = lrcString.split('\n');
+      const lyrics = [];
+      // 标准LRC时间标签: [mm:ss.xx] 或 [mm:ss.xxx]
+      const timeRegex = /^\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\](.*)/;
+
+      // console.log(`[PlayerStore] parseLrc 处理歌词，行数: ${lines.length}`);
+      // console.log(`[PlayerStore] 歌词内容前100个字符: ${lrcString.substring(0, 100)}`);
+
+      let processedLineCount = 0;
+      let skippedLineCount = 0;
+      let jsonParseFailCount = 0;
+      let jsonParseSuccessCount = 0;
+      let yrcLineCount = 0;
+      let normalLrcLineCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) {
+          skippedLineCount++;
+          continue; // 跳过空行
+        }
+
+        // 首先判断是否带有时间标签 [mm:ss.xxx]
+        if (line.startsWith('[') && line.indexOf(']') > 0) {
+          try {
+            // 提取时间标签和歌词内容
+            const timeEndIndex = line.indexOf(']') + 1;
+            const timeTag = line.substring(0, timeEndIndex);
+            const content = line.substring(timeEndIndex).trim();
+
+            // 解析时间标签 [mm:ss.xxx]
+            const timeMatch = timeTag.match(/^\[(\d{2}):(\d{2})\.(\d{2,3})\]$/);
+            if (timeMatch) {
+              const minutes = parseInt(timeMatch[1], 10);
+              const seconds = parseInt(timeMatch[2], 10);
+              const milliseconds = parseInt(timeMatch[3].padEnd(3, '0'), 10);
+              const time = minutes * 60 + seconds + milliseconds / 1000;
+
+              // 处理歌词内容
+              let text = '';
+
+              // 检查内容是否为YRC格式的JSON对象
+              if (content.startsWith('{') && content.includes('"c":[')) {
+                try {
+                  const yrcObj = JSON.parse(content);
+                  if (yrcObj && yrcObj.c && Array.isArray(yrcObj.c)) {
+                    // 提取所有"tx"字段并连接
+                    text = yrcObj.c.map(item => item.tx || '').join('');
+                    yrcLineCount++;
+                  }
+                  jsonParseSuccessCount++;
+                } catch (e) {
+                  jsonParseFailCount++;
+                  // JSON解析失败，尝试使用正则表达式提取文本
+                  text = content.replace(/<\d+,\d+>/g, '');
+                }
+              } else {
+                // 普通LRC内容或包含<t,d>格式的逐字标记
+                text = content.replace(/<\d+,\d+>/g, '');
+                normalLrcLineCount++;
+              }
+
+              // 如果成功提取到文本，添加到歌词数组
+              if (text.trim()) {
+                lyrics.push({ time, text: text.trim() });
+                processedLineCount++;
+              }
+            }
+          } catch (e) {
+            console.error(`[PlayerStore] parseLrc: 解析第${i + 1}行时出错:`, e);
+            skippedLineCount++;
+          }
+        }
+        // 如果不是标准的带时间标签的歌词行，检查是否为YRC元数据
+        else if (line.startsWith('{') && line.includes('"c":[')) {
+          try {
+            // 尝试解析为JSON
+            const metaObj = JSON.parse(line);
+            if (metaObj && metaObj.t !== undefined && metaObj.c && Array.isArray(metaObj.c)) {
+              // 这是YRC元数据行，如{"t":0,"c":[{"tx":"作词: "},{"tx":"周杰伦"}]}
+              // 通常这些元数据不包含时间标签，我们可以选择跳过或添加为时间为0的特殊行
+              // 例如：我们可以把它作为时间为metaObj.t/1000秒的特殊行
+              const time = metaObj.t / 1000;
+              const text = metaObj.c.map(item => item.tx || '').join('');
+
+              if (text.trim()) {
+                lyrics.push({ time, text: text.trim() });
+                processedLineCount++;
+                yrcLineCount++;
+              }
+            }
+            jsonParseSuccessCount++;
+          } catch (e) {
+            jsonParseFailCount++;
+            skippedLineCount++;
+          }
+        } else {
+          // 其他无法识别的行，跳过
+          skippedLineCount++;
+        }
+      }
+
+      // console.log(`[PlayerStore] parseLrc 统计: 总行数=${lines.length}, 处理=${processedLineCount}, 跳过=${skippedLineCount}, JSON成功=${jsonParseSuccessCount}, JSON失败=${jsonParseFailCount}, YRC行=${yrcLineCount}, 普通LRC行=${normalLrcLineCount}`);
+
+      // 按时间排序
+      return lyrics.sort((a, b) => a.time - b.time);
+    },
+
+    /**
+     * 获取歌词并解析
+     * @param {string|number} songId - 歌曲ID
+     * @param {number} retryCount - 当前重试次数
+     * @param {number} maxRetries - 最大重试次数
+     */
+    async fetchLyrics(songId, retryCount = 0, maxRetries = 2) {
+      if (!songId) return;
+
+      // 确保songId是字符串
+      const songIdStr = String(songId);
+
+      // --- BEGIN ADDED LOGS ---
+      // console.log(`[PlayerStore] fetchLyrics called with songIdStr: ${songIdStr}`);
+      // const isKwSongInitialCheck = songIdStr.startsWith('kw_') || songIdStr.startsWith('kw-') ||
+      //   (this.currentSong && this.currentSong.id === songIdStr && this.currentSong.isFromKw);
+      // // console.log(`[PlayerStore] fetchLyrics - isKwSong initial check: ${isKwSongInitialCheck}`);
+      // --- END ADDED LOGS ---
+
+      let isKwSong = false;
+      if (songIdStr.startsWith(KW_ID_PREFIX) || songIdStr.startsWith('kw-')) {
+        isKwSong = true;
+      } else if (this.currentSong && this.currentSong.id === songIdStr && this.currentSong.isFromKw) {
+        // 如果当前歌曲对象明确标记了 isFromKw，并且ID不是 main_ 开头，则认为是酷我
+        if (!songIdStr.startsWith(MAIN_ID_PREFIX)) {
+          isKwSong = true;
+        }
+      }
+      // console.log(`[PlayerStore] fetchLyrics - Final isKwSong check for ${songIdStr}: ${isKwSong}`);
+
+      // 如果当前已经在加载相同ID的歌词，则不重复请求
+      if (this.isLoadingLyrics && this._currentLoadingSongId === songIdStr && retryCount === 0) {
+        // // console.log(`[PlayerStore] 已经在加载歌词中，ID: ${songIdStr}，跳过重复请求`);
+        return;
+      }
+
+      // 记录当前正在加载的歌曲ID
+      this._currentLoadingSongId = songIdStr;
+
+      // 只有在第一次请求时(非重试)才设置加载状态
+      if (retryCount === 0) {
+        this.isLoadingLyrics = true;
+      }
+
+      try {
+        // 检查缓存中是否有歌词
+        const cachedLyrics = await dataCache.getCachedLyrics(songIdStr); // 确保这里是 await
+        // --- BEGIN ADDED LOGS ---
+        if (cachedLyrics) {
+          // console.log(`[PlayerStore] fetchLyrics - Cache HIT for songIdStr: ${songIdStr}`, cachedLyrics);
+        } else {
+          // console.log(`[PlayerStore] fetchLyrics - Cache MISS for songIdStr: ${songIdStr}`);
+        }
+        // --- END ADDED LOGS ---
+        if (cachedLyrics) {
+          // // console.log(`[PlayerStore] 使用缓存的歌词，ID: ${songIdStr}`);
+          // 从缓存读取歌词数据后，同样需要经过parseLrc处理
+          this.currentLyrics = this.parseLrc(cachedLyrics.lrc); // 确保解析
+          // --- BEGIN ADDED LOGS ---
+          // console.log('[PlayerStore] After parsing cached lrc, this.currentLyrics:', JSON.stringify(this.currentLyrics).substring(0, 500) + '...');
+          // console.log('[PlayerStore] After parsing cached lrc, this.currentLyrics.length:', this.currentLyrics.length);
+          // --- END ADDED LOGS ---
+          if (cachedLyrics.tlyric) {
+            this.translatedLyrics = this.parseLrc(cachedLyrics.tlyric); // 确保解析
+          } else {
+            this.translatedLyrics = [];
+          }
+
+          // 如果当前歌曲存在且与歌词ID匹配，更新专辑图片
+          if (this.currentSong && this.currentSong.id === songIdStr && cachedLyrics.picUrl) {
+            this.currentSong.albumArt = cachedLyrics.picUrl;
+          }
+
+          // 更新当前歌词索引，确保立即显示正确的歌词行
+          this.updateCurrentLyricIndex(this.currentTime);
+
+          this.isLoadingLyrics = false;
+          this._currentLoadingSongId = null;
+          return;
+        }
+
+        // 判断是否是酷我歌曲ID - 修复判断逻辑
+        const isKwSong = songIdStr.startsWith('kw_') || songIdStr.startsWith('kw-') ||
+          (this.currentSong && this.currentSong.id === songIdStr && this.currentSong.isFromKw);
+
+        // 提取纯数字ID
+        let cleanId = songIdStr;
+        let kwId = null;
+
+        if (isKwSong) {
+          // 处理酷我歌曲ID
+          if (songIdStr.startsWith('kw_')) {
+            cleanId = songIdStr; // 保留kw_前缀，后端需要这个前缀来识别酷我歌曲
+            kwId = songIdStr.substring(3); // 提取纯ID用于日志和直接API调用
+          } else if (songIdStr.startsWith('kw-')) {
+            cleanId = 'kw_' + songIdStr.substring(3); // 将kw-前缀转换为kw_前缀
+            kwId = songIdStr.substring(3);
+          } else {
+            // 如果是通过isFromKw标记识别的酷我歌曲，但ID没有前缀，添加kw_前缀
+            kwId = songIdStr;
+            cleanId = 'kw_' + songIdStr;
+          }
+
+          // // console.log(`[PlayerStore] 检测到酷我歌曲ID: ${songIdStr}, 处理后ID: ${cleanId}, 纯ID: ${kwId}`);
+
+          // 对于酷我歌曲，直接使用酷我API获取歌词
+          try {
+            // // console.log(`[PlayerStore] 直接从酷我API获取歌词，ID: ${kwId}`);
+            // 修正酷我API歌词请求URL格式，将format=all改为format=json
+            const kwResponse = await axios.get(`${FALLBACK_API_BASE}`, {
+              params: { id: kwId, type: 'lyr', format: 'json' }
+            });
+
+            // // console.log(`[PlayerStore] 直接从酷我API获取歌词成功:`, kwResponse.data);
+
+            // 处理酷我API返回的歌词数据
+            if (kwResponse.data && kwResponse.data.code === 200) {
+              // 使用专门的方法处理酷我歌词
+              const lrcContent = this._processKwLyrics(kwResponse.data);
+
+              if (lrcContent) {
+                // 解析歌词
+                this.currentLyrics = this.parseLrc(lrcContent);
+                // --- BEGIN ADDED LOGS ---
+                // console.log('[PlayerStore] After parsing network lrcContent, this.currentLyrics:', JSON.stringify(this.currentLyrics).substring(0, 500) + '...');
+                // console.log('[PlayerStore] After parsing network lrcContent, this.currentLyrics.length:', this.currentLyrics.length);
+                // --- END ADDED LOGS ---
+                this.translatedLyrics = []; // 酷我API不提供翻译歌词
+
+                // 尝试获取歌曲详情以获取专辑图片
+                try {
+                  const songInfoResponse = await axios.get(FALLBACK_API_BASE, {
+                    params: { id: kwId, type: 'song', format: 'json', level: 'lossless' }
+                  });
+
+                  if (songInfoResponse.data && songInfoResponse.data.code === 200 && songInfoResponse.data.data) {
+                    const picUrl = songInfoResponse.data.data.pic;
+                    if (picUrl && picUrl !== 'NO_PIC') {
+                      // // console.log(`[PlayerStore] 从酷我API获取到专辑图片: ${picUrl}`);
+                      // 更新当前歌曲的专辑图片
+                      if (this.currentSong && this.currentSong.id === songIdStr) {
+                        this.currentSong.albumArt = picUrl;
+                        // // console.log(`[PlayerStore] 更新当前歌曲专辑图片为: ${picUrl}`);
+                      }
+
+                      // 缓存歌词和专辑图片
+                      dataCache.cacheLyrics(songIdStr, {
+                        lrc: lrcContent,
+                        tlyric: '',
+                        picUrl: picUrl
+                      });
+                    } else if (picUrl === 'NO_PIC') {
+                      // // console.log(`[PlayerStore] 酷我API返回NO_PIC，保留原有专辑图片`);
+                      // 缓存歌词，但使用当前歌曲的专辑图片
+                      dataCache.cacheLyrics(songIdStr, {
+                        lrc: lrcContent,
+                        tlyric: '',
+                        picUrl: this.currentSong?.albumArt
+                      });
+                    }
+                  }
+                } catch (picError) {
+                  console.error(`[PlayerStore] 获取酷我歌曲专辑图片失败:`, picError);
+                  // 即使获取专辑图片失败，也继续使用已获取到的歌词
+                  dataCache.cacheLyrics(songIdStr, {
+                    lrc: lrcContent,
+                    tlyric: '',
+                    picUrl: this.currentSong?.albumArt
+                  });
+                }
+
+                // 更新当前歌词索引
+                this.updateCurrentLyricIndex(this.currentTime);
+
+                // 设置加载状态
+                this.isLoadingLyrics = false;
+                this._currentLoadingSongId = null;
+
+                return; // 成功获取歌词，直接返回
+              }
+            }
+          } catch (kwError) {
+            console.error(`[PlayerStore] 直接从酷我API获取歌词失败:`, kwError);
+          }
+        } else {
+          // 网易云歌曲处理
+          if (USE_ID_PREFIX && songIdStr.startsWith(MAIN_ID_PREFIX)) {
+            cleanId = songIdStr.substring(MAIN_ID_PREFIX.length);
+          }
+
+          // // console.log(`[PlayerStore] 检测到网易云歌曲ID: ${songIdStr}, 处理后ID: ${cleanId}`);
+
+          try {
+            // 使用新的/lyric/new接口获取逐字歌词
+            const response = await axios.get(`${MAIN_API_BASE}/lyric/new`, {
+              params: { id: cleanId }
+            });
+
+            // // console.log(`[PlayerStore] 网易云新歌词API响应:`, response.data);
+
+            if (response.data && response.data.code === 200) {
+              let lrcContent = '';
+              let translatedLrcContent = '';
+              let romajiLrcContent = '';  // 罗马音歌词
+              let picUrl = null;
+
+              // 提取歌词，优先使用逐字歌词
+              if (response.data.lrc && response.data.lrc.lyric) {
+                lrcContent = response.data.lrc.lyric;
+
+                // 检查是否有逐字歌词
+                if (response.data.yrc && response.data.yrc.lyric) {
+                  // 使用逐字歌词替换普通歌词
+                  // console.log('[PlayerStore] 检测到逐字歌词，使用逐字歌词');
+                  lrcContent = response.data.yrc.lyric;
+                }
+              }
+
+              // 提取翻译歌词
+              if (response.data.tlyric && response.data.tlyric.lyric) {
+                translatedLrcContent = response.data.tlyric.lyric;
+              }
+
+              // 提取罗马音歌词
+              if (response.data.romalrc && response.data.romalrc.lyric) {
+                romajiLrcContent = response.data.romalrc.lyric;
+                // 如果没有翻译歌词但有罗马音歌词，使用罗马音歌词作为翻译
+                if (!translatedLrcContent && romajiLrcContent) {
+                  translatedLrcContent = romajiLrcContent;
+                }
+              }
+
+              // 尝试提取专辑图片URL
+              picUrl = this._extractAlbumArtFromNeteaseLyrics(response.data);
+
+              // --- BEGIN ADDED LOGS ---
+              // console.log('[PlayerStore] Netease API Response - Raw lrcContent:', lrcContent);
+              // console.log('[PlayerStore] Netease API Response - Raw picUrl:', picUrl);
+              // --- END ADDED LOGS ---
+
+              // 如果没有找到专辑图片URL，尝试从歌曲详情获取
+              if (!picUrl) {
+                try {
+                  // 获取歌曲详情
+                  const songDetailResponse = await axios.get(`${MAIN_API_BASE}/song/detail`, {
+                    params: { ids: cleanId }
+                  });
+
+                  if (songDetailResponse.data && songDetailResponse.data.code === 200 &&
+                    songDetailResponse.data.songs && songDetailResponse.data.songs.length > 0) {
+                    const songDetail = songDetailResponse.data.songs[0];
+                    if (songDetail.al && songDetail.al.picUrl) {
+                      picUrl = songDetail.al.picUrl;
+                      // console.log(`[PlayerStore] 从歌曲详情获取到专辑图片URL: ${picUrl}`);
+                    }
+                  }
+                } catch (detailError) {
+                  console.error(`[PlayerStore] 获取网易云歌曲详情失败:`, detailError);
+                }
+              }
+
+              // 解析歌词
+              this.currentLyrics = this.parseLrc(lrcContent);
+              // --- BEGIN ADDED LOGS ---
+              // console.log('[PlayerStore] After parsing network lrcContent, this.currentLyrics:', JSON.stringify(this.currentLyrics).substring(0, 500) + '...');
+              // console.log('[PlayerStore] After parsing network lrcContent, this.currentLyrics.length:', this.currentLyrics.length);
+              // --- END ADDED LOGS ---
+              if (translatedLrcContent) {
+                this.translatedLyrics = this.parseLrc(translatedLrcContent);
+              } else {
+                this.translatedLyrics = [];
+              }
+
+              // 如果当前歌曲存在且与歌词ID匹配，更新专辑图片
+              if (this.currentSong && this.currentSong.id === songIdStr && picUrl) {
+                this.currentSong.albumArt = picUrl;
+                // // console.log(`[PlayerStore] 更新当前歌曲专辑图片: ${picUrl}`);
+
+                // 如果在歌词页面，立即触发UI更新
+                if (this.showLyricsView) {
+                  // 创建一个临时对象，触发Vue的响应式更新
+                  this.currentSong = { ...this.currentSong };
+                }
+              }
+
+              // 缓存歌词和专辑图片
+              dataCache.cacheLyrics(songIdStr, {
+                lrc: lrcContent,
+                tlyric: translatedLrcContent,
+                picUrl: picUrl || (this.currentSong?.albumArt !== DEFAULT_ALBUM_ART ? this.currentSong?.albumArt : null)
+              });
+
+              // 更新当前歌词索引
+              this.updateCurrentLyricIndex(this.currentTime);
+
+              // 设置加载状态
+              this.isLoadingLyrics = false;
+              this._currentLoadingSongId = null;
+
+              return; // 成功获取歌词，直接返回
+            }
+          } catch (error) {
+            console.error(`[PlayerStore] 从网易云API获取歌词失败:`, error);
+          }
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] 获取歌词时出错，ID: ${songIdStr}，错误:`, error);
+
+        // 添加重试逻辑
+        if (retryCount < maxRetries) {
+          // // console.log(`[PlayerStore] 歌词获取失败，将在1秒后进行第${retryCount + 1}次重试`);
+
+          // 延迟后重试
+          setTimeout(() => {
+            this.fetchLyrics(songId, retryCount + 1, maxRetries);
+          }, 1000);
+
+          return; // 退出当前执行，等待重试
+        }
+
+        // 所有重试都失败后，设置默认歌词
+        this.currentLyrics = [{ time: 0, text: '获取歌词失败' }];
+        this.translatedLyrics = [];
+      } finally {
+        if (retryCount === maxRetries || this.currentLyrics.length > 0) {
+          // 只有在最后一次重试或成功获取歌词时才设置加载状态为false
+          this.isLoadingLyrics = false;
+          this._currentLoadingSongId = null;
+        }
+      }
+    },
+
+    /**
+     * 更新当前应该高亮显示的歌词行索引。
+     * @param {number} currentTime - 当前播放时间（秒）。
+     */
+    updateCurrentLyricIndex(currentTime) {
+      if (!this.currentLyrics || this.currentLyrics.length === 0) {
+        this.currentLyricIndex = -1;
+        return;
+      }
+
+      // 寻找第一个时间大于当前时间的歌词行，则其前一行是当前行
+      let currentIdx = -1;
+
+      // 优化：直接从当前索引开始查找，避免每次都从头开始
+      let startIdx = Math.max(0, this.currentLyricIndex);
+
+      // 如果当前索引已经是最后一个，或者当前时间小于当前索引对应的时间，则从头开始查找
+      if (startIdx >= this.currentLyrics.length - 1 ||
+        (startIdx > 0 && currentTime < this.currentLyrics[startIdx].time)) {
+        startIdx = 0;
+      }
+
+      for (let i = startIdx; i < this.currentLyrics.length; i++) {
+        if (this.currentLyrics[i].time > currentTime) {
+          currentIdx = i - 1;
+          break;
+        }
+      }
+
+      // 如果循环结束都没找到（即currentTime超过了所有歌词时间），则最后一句是当前行
+      if (currentIdx === -1 && currentTime >= this.currentLyrics[this.currentLyrics.length - 1].time) {
+        currentIdx = this.currentLyrics.length - 1;
+      }
+
+      // 处理currentTime在第一句歌词之前的情况
+      if (currentIdx < 0 && this.currentLyrics.length > 0 && currentTime < this.currentLyrics[0].time) {
+        currentIdx = -1; // 在第一句歌词之前，不高亮任何歌词
+      }
+
+      // 只有当索引发生变化时才更新，避免不必要的重渲染
+      if (this.currentLyricIndex !== currentIdx) {
+        this.currentLyricIndex = currentIdx;
+      }
+    },
+
+    /**
+     * 获取页面中的音频元素
+     * @returns {HTMLAudioElement|null} 找到的音频元素或null
+     */
+    _getAudioElement() {
+      // 首先尝试通过ID查找
+      const audioElement = document.getElementById('audio-player');
+      if (!audioElement) {
+        console.error('[PlayerStore] 关键错误: 无法通过ID \'audio-player\' 找到音频元素!');
+      }
+      return audioElement;
+    },
+
+    /**
+     * 内部方法：实际播放歌曲，获取URL并设置音频元素。
+     * @param {object} song - 歌曲对象。
+     * @param {number} index - 歌曲在播放列表中的索引。
+     * @param {boolean} wasPlaying - 之前的播放状态。
+     */
+    async _actuallyPlaySong(song, index, wasPlaying = true) {
+      if (!song || !song.id) {
+        console.error(`[PlayerStore] _actuallyPlaySong: 无效的歌曲对象`);
+        this.isLoadingNewSong = false;
+        return;
+      }
+
+      try {
+        // 保存当前歌曲的专辑图片，避免被覆盖
+        const originalAlbumArt = song.albumArt && song.albumArt !== DEFAULT_ALBUM_ART ? song.albumArt : null;
+
+        // 获取歌词
+        this.fetchLyrics(song.id);
+
+        // 获取歌曲URL
+        let songDetails = await this._fetchSongUrl(song);
+
+        if (!songDetails) {
+          // 无法获取歌曲播放链接，尝试从备用API获取
+          const fallbackDetails = await this._fetchSongUrlFromFallbackApi(song);
+          if (!fallbackDetails) {
+            console.error(`[PlayerStore] _actuallyPlaySong: 备用API也无法获取URL，放弃播放`);
+            // 备用API也无法获取歌曲播放链接
+            return;
+          }
+          // 使用备用API的结果
+          songDetails = fallbackDetails;
+        }
+
+        // 更新当前歌曲和索引
+        this.currentSong = {
+          ...song,
+          url: songDetails.url,
+          directPlayUrl: songDetails.directPlayUrl,
+          isFallbackDirect: songDetails.isFallbackDirect,
+          isFromKw: songDetails.isFromKw || song.isFromKw || false, // 确保保留isFromKw标记
+          duration: songDetails.duration
+        };
+
+        // 确保专辑图片不是默认图片
+        if (originalAlbumArt) {
+          this.currentSong.albumArt = originalAlbumArt;
+        } else if (song.albumArt && song.albumArt !== DEFAULT_ALBUM_ART) {
+          this.currentSong.albumArt = song.albumArt;
+        }
+
+        this.currentSongIndex = index;
+        this.currentTime = 0;
+
+        // 重置预加载标志
+        this._hasPreloadedBeforeEnd = false;
+
+        // 预加载下一首
+        this.preloadNextSong();
+
+        // 获取音频元素并设置源
+        const audioElement = this._getAudioElement();
+        if (!audioElement) {
+          console.error(`[PlayerStore] _actuallyPlaySong: 无法获取音频元素`);
+          return;
+        }
+
+        // 清除当前音频，确保旧的音频不会播放
+        audioElement.pause();
+        audioElement.currentTime = 0;
+        audioElement.src = '';
+
+        // 确定最终要播放的URL
+        let finalUrlToPlay = songDetails.url || songDetails.directPlayUrl;
+        if (!finalUrlToPlay) {
+          console.error(`[PlayerStore] _actuallyPlaySong: 没有有效的播放URL`);
+          return;
+        }
+
+        // 设置音频源并播放
+        audioElement.src = finalUrlToPlay;
+        audioElement.volume = this.volume;
+
+        // 确保音频元素已经加载
+        audioElement.load();
+
+        // 恢复播放状态并清除加载标志
+        this.isPlaying = wasPlaying;
+        this.isLoadingNewSong = false;
+
+        try {
+          // 使用setTimeout确保音频元素有时间加载
+          setTimeout(() => {
+            const playPromise = audioElement.play();
+
+            if (playPromise !== undefined) {
+              let playTimeoutId = null;
+              const TIMEOUT_DURATION = 10000; // 10秒超时
+
+              // 设置播放超时
+              playTimeoutId = setTimeout(() => {
+                if (this.currentSong && this.currentSong.id === song.id) {
+                  console.warn(`[PlayerStore] _actuallyPlaySong: 播放超时`);
+                  this.isPlaying = false;
+                }
+              }, TIMEOUT_DURATION);
+
+              playPromise.then(() => {
+                clearTimeout(playTimeoutId);
+                this.isPlaying = true;
+              }).catch(error => {
+                clearTimeout(playTimeoutId);
+
+                // 过滤掉常见的 AbortError，这通常是由于快速切换歌曲导致的，不需要记录
+                if (error.name !== 'AbortError') {
+                  console.error(`[PlayerStore] _actuallyPlaySong: 播放失败: ${error.name}`, error);
+                }
+
+                if (this.currentSong && this.currentSong.id === song.id) { // 确保还是当前尝试播放的歌曲
+                  this.isPlaying = false; // 播放失败，设置isPlaying为false
+                }
+
+                // 如果播放失败，再次尝试
+                setTimeout(() => {
+                  if (this.currentSong && this.currentSong.id === song.id) {
+                    audioElement.play().then(() => {
+                      this.isPlaying = true;
+                    }).catch(retryError => {
+                      console.error(`[PlayerStore] _actuallyPlaySong: 再次尝试播放也失败`, retryError);
+
+                      // 增加第三次重试
+                      setTimeout(() => {
+                        if (this.currentSong && this.currentSong.id === song.id) {
+                          audioElement.play().then(() => {
+                            this.isPlaying = true;
+                          }).catch(thirdRetryError => {
+                            console.error(`[PlayerStore] _actuallyPlaySong: 第三次尝试播放也失败`, thirdRetryError);
+                            // 记录详细的错误信息
+                            console.error(`[PlayerStore] 播放失败详情 - 歌曲: ${song.name}, ID: ${song.id}, URL: ${this.currentSong?.url}`);
+                            console.error(`[PlayerStore] 播放失败可能原因: ${thirdRetryError.name}: ${thirdRetryError.message}`);
+
+                            // 检查音频元素的错误
+                            if (audioElement.error) {
+                              console.error(`[PlayerStore] 音频元素错误码: ${audioElement.error.code}, 消息: ${audioElement.error.message}`);
+                            }
+
+                            this.isPlaying = false;
+                          });
+                        }
+                      }, 1500); // 第三次重试使用更长的延迟
+                    });
+                  }
+                }, 1000);
+              });
+            } else {
+              if (!audioElement.paused) {
+                // // console.log(`[PlayerStore] _actuallyPlaySong: 播放已开始`);
+                this.isPlaying = true; // 如果真的开始播放了
+              } else {
+                console.warn(`[PlayerStore] _actuallyPlaySong: 音频元素暂停中，设置播放状态为false`);
+                this.isPlaying = false;
+              }
+            }
+          }, 100);
+        } catch (error) {
+          console.error(`[PlayerStore] _actuallyPlaySong: 播放时发生异常`, error);
+          // audioElement.play() 同步抛出错误
+          this.isPlaying = false;
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] _actuallyPlaySong: 处理过程中发生错误`, error);
+        this.isPlaying = false;
+        this.isLoadingNewSong = false;
+      }
+    },
+
+    /**
+     * 播放指定歌曲，会优先使用预加载的URL。
+     * @param {object} song - 要播放的歌曲对象。
+     * @param {number|Array|Object} indexOrQueue - 歌曲在播放列表中的索引，或者包含当前歌曲的播放队列，或者包含索引和队列的对象。
+     * @param {string|null} playlistIdContext - 当前播放列表的上下文ID (例如歌单ID)。
+     */
+    async playSong(song, indexOrQueue, playlistIdContext = null) {
+      if (!song || typeof song.id === 'undefined') {
+        console.error("[PlayerStore] playSong: 无效的歌曲对象或歌曲ID缺失", song);
+        return;
+      }
+
+      // 防止对当前已在播放的歌曲重复执行整个播放逻辑
+      if (this.currentSong && this.currentSong.id === song.id && this.isPlaying) {
+        // 如果音频元素存在且暂停了，可以恢复播放
+        const audioElement = this._getAudioElement();
+        if (audioElement && audioElement.paused) {
+          audioElement.play().catch(e => console.error("[PlayerStore] Error resuming playback:", e));
+        }
+        return;
+      }
+
+      // 设置正在加载新歌曲的状态，并立即暂停当前播放的歌曲
+      this.isLoadingNewSong = true;
+
+      // 记录原来的播放状态，并立即暂停当前播放的歌曲
+      const wasPlaying = this.isPlaying;
+
+      // 立即暂停当前播放的歌曲并清除音频源
+      const audioElement = this._getAudioElement();
+      if (audioElement) {
+        audioElement.pause();
+        // 清除当前的音频源，确保不会继续播放
+        audioElement.src = '';
+        // 设置为非播放状态，等待新歌曲加载完成后再恢复
+        this.isPlaying = false;
+      }
+
+      // 判断第二个参数是索引还是队列
+      let queue = null;
+      let songIndexInCurrentPlaylist = -1;
+      let shouldUpdatePlaylist = false;
+
+      try {
+        if (typeof indexOrQueue === 'number') {
+          // 如果是数字，表示是索引
+          // // console.log(`[PlayerStore] playSong: 收到数字索引 ${indexOrQueue}`);
+          songIndexInCurrentPlaylist = indexOrQueue;
+          queue = this.playlist; // 使用当前播放列表
+        } else if (Array.isArray(indexOrQueue)) {
+          // 如果是数组，表示是队列
+          // // console.log(`[PlayerStore] playSong: 收到数组队列，长度 ${indexOrQueue.length}`);
+          queue = indexOrQueue;
+          shouldUpdatePlaylist = true;
+
+          // 在队列中查找歌曲的索引
+          songIndexInCurrentPlaylist = queue.findIndex(s => s.id === song.id);
+          if (songIndexInCurrentPlaylist === -1) {
+            // // console.log(`[PlayerStore] playSong: 在队列中未找到歌曲，使用索引0`);
+            songIndexInCurrentPlaylist = 0; // 如果找不到，默认使用第一首
+          }
+        } else if (typeof indexOrQueue === 'object' && indexOrQueue !== null) {
+          // // console.log(`[PlayerStore] playSong: 收到对象格式参数`);
+
+          // 处理从PlaylistDetailView或SongItem传来的对象格式
+          if (typeof indexOrQueue.index === 'number') {
+            // // console.log(`[PlayerStore] playSong: 使用对象中的index: ${indexOrQueue.index}`);
+            songIndexInCurrentPlaylist = indexOrQueue.index;
+
+            // 检查是否有完整队列
+            if (Array.isArray(indexOrQueue.fullQueue) && indexOrQueue.fullQueue.length > 0) {
+              // // console.log(`[PlayerStore] playSong: 使用对象中的fullQueue, 长度: ${indexOrQueue.fullQueue.length}`);
+              queue = indexOrQueue.fullQueue;
+              shouldUpdatePlaylist = true;
+            } else {
+              queue = this.playlist;
+            }
+          } else if (indexOrQueue.songIndex !== undefined && typeof indexOrQueue.songIndex === 'number') {
+            // // console.log(`[PlayerStore] playSong: 使用对象中的songIndex: ${indexOrQueue.songIndex}`);
+            songIndexInCurrentPlaylist = indexOrQueue.songIndex;
+            queue = this.playlist;
+          } else {
+            console.error("[PlayerStore] playSong: 无效的索引对象", indexOrQueue);
+            return;
+          }
+        } else {
+          console.error("[PlayerStore] playSong: 无效的索引或队列参数", indexOrQueue);
+          return;
+        }
+
+        // 更新播放列表（如果需要）
+        if (shouldUpdatePlaylist && queue && queue.length > 0) {
+          // // console.log(`[PlayerStore] playSong: 更新播放列表，长度 ${queue.length}`);
+          this.setPlaylist(queue, true, false);
+        }
+
+        // 如果播放列表为空，无法播放
+        if (!this.playlist || this.playlist.length === 0) {
+          console.error("[PlayerStore] playSong: 播放列表为空，无法播放");
+          return;
+        }
+
+        // 检查索引是否有效
+        if (songIndexInCurrentPlaylist < 0 || songIndexInCurrentPlaylist >= this.playlist.length) {
+          console.error(`[PlayerStore] playSong: 无效的歌曲索引 ${songIndexInCurrentPlaylist}，播放列表长度为 ${this.playlist.length}`);
+          return;
+        }
+
+        // 检查是否有预加载的URL
+        const targetSongInPlaylist = this.playlist[songIndexInCurrentPlaylist];
+        if (targetSongInPlaylist && targetSongInPlaylist.preloadedUrl) {
+          // // console.log(`[PlayerStore] playSong: 使用预加载的URL播放 ${targetSongInPlaylist.name}`);
+
+          // 使用预加载的URL
+          this.currentSong = {
+            ...targetSongInPlaylist,
+            url: targetSongInPlaylist.preloadedUrl,
+            directPlayUrl: targetSongInPlaylist.directPlayUrl || null,
+            isFallbackDirect: targetSongInPlaylist.isFallbackDirect || false,
+            isFromKw: targetSongInPlaylist.isFromKw || song.isFromKw || false, // 确保保留isFromKw标记
+            lyricist: targetSongInPlaylist.lyricist || song.lyricist || '',
+            composer: targetSongInPlaylist.composer || song.composer || ''
+          };
+
+          this.currentSongIndex = songIndexInCurrentPlaylist;
+          this.isPlaying = true;
+          this.currentTime = 0;
+
+          if (this.playlist[songIndexInCurrentPlaylist]) { // 再次检查以防万一
+            this.playlist[songIndexInCurrentPlaylist].preloadedUrl = null; // 清除已使用的预加载URL
+          }
+
+          // 获取音频元素并设置源
+          const audioElement = this._getAudioElement();
+          if (audioElement) {
+            // 设置音频源并播放
+            audioElement.src = this.currentSong.url;
+            audioElement.volume = this.volume;
+
+            try {
+              // // console.log(`[PlayerStore] playSong: 尝试播放音频`);
+              // 恢复之前的播放状态
+              this.isPlaying = wasPlaying;
+              this.isLoadingNewSong = false;
+
+              const playPromise = audioElement.play();
+
+              if (playPromise !== undefined) {
+                playPromise.then(() => {
+                  // // console.log(`[PlayerStore] playSong: 音频播放成功`);
+                }).catch(error => {
+                  console.error(`[PlayerStore] playSong: 音频播放失败:`, error);
+                  // 如果播放失败，尝试再次播放
+                  setTimeout(() => {
+                    if (this.isPlaying) {
+                      // // console.log(`[PlayerStore] playSong: 第一次重试播放`);
+                      audioElement.play().then(() => {
+                        // // console.log(`[PlayerStore] playSong: 第一次重试播放成功`);
+                      }).catch(e => {
+                        console.error(`[PlayerStore] playSong: 第一次重试播放失败:`, e);
+                        // 增加第二次重试
+                        setTimeout(() => {
+                          if (this.isPlaying) {
+                            // // console.log(`[PlayerStore] playSong: 第二次重试播放`);
+                            audioElement.play().then(() => {
+                              // // console.log(`[PlayerStore] playSong: 第二次重试播放成功`);
+                            }).catch(e2 => {
+                              console.error(`[PlayerStore] playSong: 第二次重试播放失败:`, e2);
+                              this.isPlaying = false;
+                            });
+                          }
+                        }, 1500);
+                      });
+                    }
+                  }, 300);
+                });
+              }
+            } catch (error) {
+              console.error(`[PlayerStore] playSong: 播放时出错:`, error);
+              this.isPlaying = false;
+            }
+          }
+
+          // 立即预加载下一首歌
+          await this.preloadNextSong();
+        } else {
+          // // console.log(`[PlayerStore] playSong: 没有预加载URL，调用_actuallyPlaySong`);
+          await this._actuallyPlaySong(song, songIndexInCurrentPlaylist, wasPlaying);
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] playSong: 播放过程中发生错误:`, error);
+        this.isPlaying = false;
+        this.isLoadingNewSong = false;
+      }
+    },
+
+    /**
+     * 切换播放/暂停状态。
+     */
+    togglePlayPause() {
+      if (!this.currentSong) {
+        console.error(`[PlayerStore] togglePlayPause: 没有当前歌曲，无法切换播放状态`);
+        return;
+      }
+
+      try {
+        // 获取音频元素
+        const audioElement = this._getAudioElement();
+        if (!audioElement) {
+          console.error(`[PlayerStore] togglePlayPause: 无法获取音频元素`);
+          return;
+        }
+
+        // 切换播放状态
+        this.isPlaying = !this.isPlaying;
+
+        // 根据新状态执行播放或暂停
+        if (this.isPlaying) {
+          // 确保音频元素有有效的src
+          if (!audioElement.src || audioElement.src === 'about:blank') {
+            console.error(`[PlayerStore] togglePlayPause: 音频元素没有有效的src`);
+
+            // 尝试重新获取URL
+            this._actuallyPlaySong(this.currentSong, this.currentSongIndex);
+            return;
+          }
+
+          // 尝试播放
+          audioElement.play().then(() => {
+            // 播放成功
+          }).catch(error => {
+            console.error(`[PlayerStore] togglePlayPause: 播放失败`, error);
+
+            // 如果播放失败，重置状态
+            this.isPlaying = false;
+
+            // 尝试重新获取URL并播放
+            setTimeout(() => {
+              this._actuallyPlaySong(this.currentSong, this.currentSongIndex);
+            }, 300);
+          });
+        } else {
+          audioElement.pause();
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] togglePlayPause: 切换播放状态时出错`, error);
+        // 发生错误时，确保状态一致
+        const audioElement = this._getAudioElement();
+        if (audioElement) {
+          this.isPlaying = !audioElement.paused;
+        }
+      }
+    },
+
+    /**
+     * 播放下一首歌曲。
+     */
+    async playNext() {
+      if (this.playlist.length === 0) return;
+      let nextIndex = this.currentSongIndex + 1;
+      if (nextIndex >= this.playlist.length) {
+        nextIndex = 0; // 循环到第一首
+      }
+      await this.playSong(this.playlist[nextIndex], nextIndex);
+    },
+
+    /**
+     * 播放上一首歌曲。
+     */
+    async playPrevious() {
+      if (this.playlist.length === 0) return;
+      let prevIndex = this.currentSongIndex - 1;
+      if (prevIndex < 0) {
+        prevIndex = this.playlist.length - 1; // 循环到最后一首
+      }
+      await this.playSong(this.playlist[prevIndex], prevIndex);
+    },
+
+    /**
+     * 更新当前播放时间。
+     * @param {number} time - 当前播放时间（秒）。
+     */
+    updateCurrentTime(time) {
+      this.currentTime = time;
+      this.updateCurrentLyricIndex(time); // 在时间更新时，也更新歌词索引
+
+      // 当歌曲播放到接近结束时（剩余时间小于10秒），再次预加载下一首歌
+      const totalDuration = this.currentSongDuration;
+      if (totalDuration > 0 && (totalDuration - time) <= 10) {
+        // 判断是否需要再次预加载
+        const shouldPreloadAgain = !this._hasPreloadedBeforeEnd;
+        if (shouldPreloadAgain) {
+          this._hasPreloadedBeforeEnd = true;
+          this.preloadNextSong();
+        }
+      }
+    },
+
+    /**
+     * 设置音量。
+     * @param {number} volumeLevel - 音量值 (0 到 1)。
+     */
+    setVolume(volumeLevel) {
+      this.volume = Math.max(0, Math.min(1, volumeLevel));
+    },
+
+    /**
+     * 切换歌词视图的显示状态。
+     */
+    toggleLyricsView() {
+      this.showLyricsView = !this.showLyricsView;
+    },
+
+    /**
+     * 更新当前歌曲的真实时长，该时长从 <audio> 元素的 loadedmetadata 事件获取。
+     * @param {number} realDurationInSeconds - 音频元素的实际总时长（秒）。
+     */
+    updateCurrentSongRealDuration(realDurationInSeconds) {
+      if (this.currentSong) {
+        // 确保 realDurationInSeconds 是一个有效的数字
+        const durationInSeconds = Number(realDurationInSeconds);
+        if (isNaN(durationInSeconds) || durationInSeconds <= 0) {
+          return;
+        }
+
+        // 对于所有歌曲，我们统一在 currentSong.duration 中存储毫秒
+        // 这样 currentSongDuration getter 就可以统一处理
+        const newDuration = Math.round(durationInSeconds * 1000);
+        this.currentSong.duration = newDuration;
+      }
+    },
+
+    /**
+     * 加载应用初始歌曲列表 (例如，默认搜索特定歌手)。
+     */
+    async fetchInitialSongs() {
+      try {
+        // 创建存储所有歌曲的数组
+        let allSongs = [];
+        let hasNeteaseSongs = false;
+
+        // 1. 获取网易云每日推荐（放在前面）
+        try {
+          const response = await axios.get(`${MAIN_API_BASE}/recommend/songs`);
+          let dailySongsData = [];
+
+          // 检查两种可能的推荐歌曲路径
+          if (response.data && response.data.data && response.data.data.dailySongs) {
+            dailySongsData = response.data.data.dailySongs;
+          } else if (response.data && response.data.recommend) { // 兼容旧的或不同的API结构
+            dailySongsData = response.data.recommend;
+          }
+
+          if (dailySongsData.length > 0) {
+            // // console.log(`[PlayerStore] fetchInitialSongs: 成功获取网易云每日推荐，数量: ${dailySongsData.length}`);
+
+            // 格式化网易云每日推荐歌曲
+            const formattedDailySongs = dailySongsData.map(s => {
+              let albumArtUrl = null;
+              if (s.al && s.al.picUrl) {
+                albumArtUrl = s.al.picUrl;
+              } else if (s.ar && s.ar[0] && s.ar[0].img1v1Url && s.ar[0].img1v1Url.indexOf('default') === -1) {
+                albumArtUrl = s.ar[0].img1v1Url;
+              }
+              const lyricist = s.lyricist || s.ar?.map(a => a.name).join('/');
+              const composer = s.composer || s.ar?.map(a => a.name).join('/');
+              return {
+                id: s.id,
+                name: s.name,
+                artist: s.ar?.map(a => a.name).join('/') || s.artists?.map(a => a.name).join('/') || '未知艺术家',
+                album: s.al?.name || s.album?.name || '未知专辑',
+                albumId: s.al?.id || null,
+                albumArt: albumArtUrl,
+                duration: s.dt || s.duration,
+                lyricist: lyricist,
+                composer: composer,
+                isFromKw: false, // 明确标记每日推荐歌曲非KW来源 (主API)
+                source: 'netease',
+                sourceType: '网易云每日推荐'
+              };
+            });
+
+            // 将每日推荐歌曲添加到结果中
+            allSongs = [...allSongs, ...formattedDailySongs];
+            hasNeteaseSongs = true;
+
+            // 网易云歌曲获取成功后，立即设置播放列表，不等待酷我的结果
+            if (formattedDailySongs.length > 0) {
+              // 清除搜索关键词，避免缓存混淆
+              const previousLastKeyword = this.lastSearchKeyword;
+              this.lastSearchKeyword = null;
+
+              // 设置播放列表
+              this.setPlaylist(formattedDailySongs, true, false); // replace=true, fromCache=false
+
+              // 恢复搜索关键词
+              this.lastSearchKeyword = previousLastKeyword;
+
+              // // console.log(`[PlayerStore] fetchInitialSongs: 已立即显示网易云每日推荐，共 ${formattedDailySongs.length} 首歌曲`);
+            }
+          }
+        } catch (neError) {
+          console.error('[PlayerStore] fetchInitialSongs: 获取网易云每日推荐失败:', neError);
+        }
+
+        // 2. 获取酷我热门歌曲（放在后面）
+        try {
+          // 直接获取酷我热门歌曲，使用正确的API格式
+          const kwResponse = await axios.get(`${FALLBACK_API_BASE}`, {
+            params: { type: 'hotSong' }
+          });
+
+          if (kwResponse.data && kwResponse.data.code === 200 && Array.isArray(kwResponse.data.data)) {
+            const kwHotSongs = kwResponse.data.data;
+            // // console.log(`[PlayerStore] fetchInitialSongs: 成功获取酷我热门歌曲，数量: ${kwHotSongs.length}`);
+
+            // 格式化酷我热门歌曲
+            const formattedKwSongs = kwHotSongs.map(song => {
+              const formattedSong = this._formatFallbackApiSong(song);
+              formattedSong.isFromKw = true;
+              formattedSong.source = 'kw';
+              formattedSong.sourceType = '酷我热门歌曲';
+              return formattedSong;
+            });
+
+            // 添加到所有歌曲列表
+            allSongs = [...allSongs, ...formattedKwSongs];
+
+            // 如果已经有网易云歌曲显示了，则将酷我歌曲追加到播放列表
+            if (hasNeteaseSongs && formattedKwSongs.length > 0) {
+              this.setPlaylist([...this.playlist, ...formattedKwSongs], false, false); // replace=false, fromCache=false
+              // // console.log(`[PlayerStore] fetchInitialSongs: 已追加酷我热门歌曲，共 ${formattedKwSongs.length} 首歌曲`);
+            }
+            // 如果没有网易云歌曲，则直接显示酷我歌曲
+            else if (!hasNeteaseSongs && formattedKwSongs.length > 0) {
+              this.setPlaylist(formattedKwSongs, true, false); // replace=true, fromCache=false
+              // // console.log(`[PlayerStore] fetchInitialSongs: 仅显示酷我热门歌曲，共 ${formattedKwSongs.length} 首歌曲`);
+            }
+          } else {
+            console.warn('[PlayerStore] fetchInitialSongs: 酷我热门歌曲API返回格式不正确，尝试使用备用方法');
+
+            // 备用方法：获取热门搜索关键词，然后只获取每个关键词的第一首歌曲
+            const kwKeywordResponse = await axios.get(FALLBACK_API_BASE, {
+              params: { type: 'searchKey' }
+            });
+            if (kwKeywordResponse.data && kwKeywordResponse.data.code === 200 &&
+              kwKeywordResponse.data.data && kwKeywordResponse.data.data.hots) {
+
+              const hotKeywords = kwKeywordResponse.data.data.hots;
+              // // console.log(`[PlayerStore] fetchInitialSongs: 成功获取酷我热门搜索关键词，数量: ${hotKeywords.length}`);
+
+              // 获取热门关键词对应的歌曲
+              let kwHotSongs = [];
+              for (const keyword of hotKeywords) {
+                try {
+                  // 使用关键词获取歌曲
+                  const songResponse = await axios.get(`${FALLBACK_API_BASE}`, {
+                    params: { name: keyword.name }
+                  });
+
+                  if (songResponse.data && songResponse.data.code === 200 && Array.isArray(songResponse.data.data)) {
+                    // 每个关键词只取第一首歌
+                    if (songResponse.data.data.length > 0) {
+                      kwHotSongs.push(songResponse.data.data[0]);
+                      // // console.log(`[PlayerStore] fetchInitialSongs: 关键词 "${keyword.name}" 获取到第一首歌曲`);
+
+                      // 每获取5首歌曲就更新一次播放列表，提高用户体验
+                      if (kwHotSongs.length % 5 === 0 && hasNeteaseSongs) {
+                        const formattedBatch = kwHotSongs.slice(-5).map(s => {
+                          const formatted = this._formatFallbackApiSong(s);
+                          formatted.isFromKw = true;
+                          formatted.source = 'kw';
+                          formatted.sourceType = '酷我热门歌曲';
+                          return formatted;
+                        });
+
+                        this.setPlaylist([...this.playlist, ...formattedBatch], false, false);
+                        // // console.log(`[PlayerStore] fetchInitialSongs: 已追加一批酷我歌曲，数量: ${formattedBatch.length}`);
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.error(`[PlayerStore] fetchInitialSongs: 获取关键词 "${keyword.name}" 的歌曲失败:`, error);
+                }
+              }
+
+              // 格式化酷我热门歌曲
+              const formattedKwSongs = kwHotSongs.map(song => {
+                const formattedSong = this._formatFallbackApiSong(song);
+                formattedSong.isFromKw = true;
+                formattedSong.source = 'kw';
+                formattedSong.sourceType = '酷我热门歌曲';
+                return formattedSong;
+              });
+
+              // 添加到所有歌曲列表
+              allSongs = [...allSongs, ...formattedKwSongs];
+
+              // 如果已经有网易云歌曲显示了，则将酷我歌曲追加到播放列表
+              if (hasNeteaseSongs && formattedKwSongs.length > 0) {
+                // 获取尚未添加到播放列表的歌曲
+                const remainingSongs = formattedKwSongs.slice(-(formattedKwSongs.length % 5));
+                if (remainingSongs.length > 0) {
+                  this.setPlaylist([...this.playlist, ...remainingSongs], false, false);
+                  // // console.log(`[PlayerStore] fetchInitialSongs: 已追加剩余酷我歌曲，数量: ${remainingSongs.length}`);
+                }
+              }
+              // 如果没有网易云歌曲，则直接显示酷我歌曲
+              else if (!hasNeteaseSongs && formattedKwSongs.length > 0) {
+                this.setPlaylist(formattedKwSongs, true, false);
+                // // console.log(`[PlayerStore] fetchInitialSongs: 仅显示酷我热门歌曲，共 ${formattedKwSongs.length} 首歌曲`);
+              }
+
+              // // console.log(`[PlayerStore] fetchInitialSongs: 成功获取酷我热门歌曲，总数: ${formattedKwSongs.length}`);
+            }
+          }
+        } catch (kwError) {
+          console.error('[PlayerStore] fetchInitialSongs: 获取酷我热门歌曲失败:', kwError);
+        }
+
+        // 最终日志输出
+        // // console.log(`[PlayerStore] fetchInitialSongs: 完成初始歌曲加载，总共 ${allSongs.length} 首歌曲`);
+      } catch (error) {
+        console.error('[PlayerStore] fetchInitialSongs: 获取初始歌曲失败:', error);
+      }
+    },
+
+    /**
+     * 根据关键词搜索歌曲并更新播放列表。
+     * 先从备用API获取歌曲，然后再从主API获取，并将结果合并，备用API结果优先。
+     * @param {string} keywords - 搜索关键词。
+     * @param {boolean} resetPagination - 是否重置分页信息，默认为true。
+     * @param {boolean} useCache - 是否使用缓存，默认为true。
+     * @param {boolean} skipCache - 是否跳过缓存，默认为false。
+     * @returns {Promise<Array>} 合并后的歌曲列表。
+     */
+    async searchSongs(keywords, resetPagination = true, useCache = true, skipCache = false) {
+      const originalCombinedSongIdsSize = this.combinedSongIds?.size; // 用于日志
+
+      // 1. 缓存检查 (如果命中缓存且 resetPagination=true, 需要正确初始化分页状态和IDs)
+      if (useCache && !skipCache) {
+        const cachedResults = dataCache.getCachedSearchResults(keywords);
+        if (cachedResults) {
+          this.setPlaylist(cachedResults, true, true); // replace=true, fromCache=true
+          this.lastSearchKeyword = keywords;
+
+          // 如果是从缓存加载，并且是"重置"类型的调用，需要更新分页和ID集合以反映缓存状态
+          if (resetPagination) {
+            this.mainApiSongs = cachedResults.filter(s => !s.isFromKw);
+            this.fallbackApiSongs = cachedResults.filter(s => s.isFromKw);
+            this.mainApiOffset = this.mainApiSongs.length;
+            this.fallbackApiOffset = this.fallbackApiSongs.length;
+            // 假设缓存的数据是完整的，所以 hasMore 可以先设为true，交给下一次loadMore判断
+            this.mainApiHasMore = true;
+            this.fallbackApiHasMore = true;
+            this.combinedSongIds = new Set(cachedResults.map(s => s.isFromKw ? `kw_${s.id}` : `main_${s.id}`));
+          }
+          return this.playlist; // 返回当前播放列表
+        }
+      }
+
+      this.isSearching = true;
+
+      // 2. 初始化本次搜索操作的局部状态
+      let localSongIdCache = new Set();
+      const newFallbackSongsThisCall = []; // 修改变量名
+      const newMainSongsThisCall = [];   // 修改变量名
+
+      if (resetPagination) {
+        this.mainApiOffset = 0;
+        this.fallbackApiOffset = 0;
+        this.mainApiHasMore = true; // 假定重置后有更多
+        this.fallbackApiHasMore = true; // 假定重置后有更多
+        // this.mainApiSongs 和 this.fallbackApiSongs 会在最后被完整替换
+        // this.combinedSongIds 也会在最后被完整替换
+      } else {
+        // 加载更多：localSongIdCache 需要包含当前已有的歌曲ID
+        localSongIdCache = new Set(this.combinedSongIds);
+      }
+
+
+      try {
+        let fallbackAddedThisCall = 0;
+        let mainAddedThisCall = 0;
+
+        // 3. 获取并处理备用API (酷我) 歌曲
+        if (this.fallbackApiHasMore || resetPagination) { // 只有在还有更多或者需要重置时才请求
+          const fallbackSongs = await this._searchSongsFromFallbackApi(keywords, 30, this.fallbackApiOffset);
+          for (const song of fallbackSongs) {
+            song.isFromKw = true;
+            const songKey = `kw_${song.id}`;
+            // 使用局部缓存判断重复
+            if (!localSongIdCache.has(songKey)) {
+              newFallbackSongsThisCall.push(song); // 使用修改后的变量名
+              localSongIdCache.add(songKey);
+              fallbackAddedThisCall++;
+            }
+          }
+          if (!resetPagination) { // 如果是加载更多，更新下一页的offset
+            this.fallbackApiOffset += fallbackSongs.length;
+          } else { // 如果是重置，offset就是本次获取的数量
+            this.fallbackApiOffset = fallbackSongs.length;
+          }
+          this.fallbackApiHasMore = fallbackSongs.length >= 30;
+        }
+
+        // 4. 获取并处理主API歌曲
+        if (this.mainApiHasMore || resetPagination) { // 只有在还有更多或者需要重置时才请求
+          const mainSongs = await this._searchSongsFromMainApi(keywords, 30, this.mainApiOffset);
+          for (const song of mainSongs) {
+            song.isFromKw = false; // 确保标记
+            const songKey = `main_${song.id}`;
+            // 使用局部缓存判断重复
+            if (!localSongIdCache.has(songKey)) {
+              newMainSongsThisCall.push(song); // 使用修改后的变量名
+              localSongIdCache.add(songKey);
+              mainAddedThisCall++;
+            }
+          }
+          if (!resetPagination) { // 如果是加载更多，更新下一页的offset
+            this.mainApiOffset += mainSongs.length;
+          } else { // 如果是重置，offset就是本次获取的数量
+            this.mainApiOffset = mainSongs.length;
+          }
+          this.mainApiHasMore = mainSongs.length >= 30;
+        }
+
+        // 5. 合并本次调用获取的新歌曲 (酷我API在前，网易云在后)
+        const newSongsThisCall = [...newFallbackSongsThisCall, ...newMainSongsThisCall]; // 酷我API结果在前
+
+        // 6. 更新 Store 状态
+        if (resetPagination) {
+          this.setPlaylist(newSongsThisCall, true, false); // true for replaceExisting
+          this.mainApiSongs = newMainSongsThisCall.slice(); // 使用修改后的变量名
+          this.fallbackApiSongs = newFallbackSongsThisCall.slice(); // 使用修改后的变量名
+          this.combinedSongIds = new Set(localSongIdCache); // 使用本次调用最终的ID集合
+          if (newSongsThisCall.length > 0) { // 只有当实际获取到歌曲时才缓存
+            dataCache.cacheSearchResults(keywords, newSongsThisCall);
+          }
+        } else { // 加载更多
+          if (newSongsThisCall.length > 0) {
+            this.setPlaylist([...this.playlist, ...newSongsThisCall], false, false); // false for replaceExisting
+            this.mainApiSongs.push(...newMainSongsThisCall); // 使用修改后的变量名
+            this.fallbackApiSongs.push(...newFallbackSongsThisCall); // 使用修改后的变量名
+            this.combinedSongIds = new Set(localSongIdCache); // 更新为最新的完整集合
+            // 对于加载更多，一般不需要覆盖整个搜索缓存，除非有特殊需求
+          }
+        }
+
+        this.lastSearchKeyword = keywords;
+        this.isSearching = false;
+        return newSongsThisCall; // 返回本次调用获取的新歌，或者也可以返回 this.playlist
+
+      } catch (error) {
+        console.error(`[PlayerStore] 搜索歌曲 "${keywords}" 时出错:`, error);
+        this.isSearching = false;
+        // 即使出错，也应该重置分页标记吗？或者保留，以便用户可以重试"加载更多"？
+        // 暂时不修改分页标记，允许用户重试。
+        return []; // 返回空数组表示出错或无结果
+      }
+    },
+
+    /**
+     * 从播放列表的第一首歌曲开始播放。
+     */
+    async playAllFromFirst() {
+      if (this.playlist.length > 0) {
+        await this.playSong(this.playlist[0], 0);
+      } else {
+        alert('播放列表为空，请先添加歌曲。');
+      }
+    },
+
+    /**
+     * 加载更多歌曲
+     * @param {string} keywords - 搜索关键词，如果不提供则使用上次的搜索关键词
+     * @param {number} limit - 每次加载的数量
+     * @returns {Promise<boolean>} - 是否还有更多歌曲可加载
+     */
+    async loadMoreSongs(keywords = null, limit = 30) {
+      // 如果没有提供关键词，使用上次搜索的关键词
+      // 如果lastSearchKeyword也为空，则无法加载更多
+      const searchKeywords = keywords || this.lastSearchKeyword;
+
+      // 如果没有搜索关键词，无法加载更多
+      if (!searchKeywords) {
+        // // console.log('[PlayerStore] loadMoreSongs: 没有搜索关键词，无法加载更多');
+        return false;
+      }
+
+      // 记录本次使用的关键词
+      if (!this.lastSearchKeyword && searchKeywords) {
+        this.lastSearchKeyword = searchKeywords;
+      }
+
+      // 如果两个API都没有更多结果，直接返回false
+      if (!this.mainApiHasMore && !this.fallbackApiHasMore) {
+        return false;
+      }
+
+      // 设置搜索状态
+      this.isSearching = true;
+
+      try {
+        // 创建两个独立的数组，分别存储备用API和主API的歌曲
+        const fallbackApiSongs = [];
+        const mainApiSongs = [];
+
+        // 首先尝试从备用API加载更多
+        let fallbackAdded = 0;
+        if (this.fallbackApiHasMore) {
+          const fallbackSongs = await this._searchSongsFromFallbackApi(searchKeywords, limit, this.fallbackApiOffset);
+
+          // 更新备用API歌曲列表
+          this.fallbackApiSongs = [...this.fallbackApiSongs, ...fallbackSongs];
+
+          // 添加备用API的歌曲（去重）
+          for (const song of fallbackSongs) {
+            // 确保每首歌曲都有isFromKw标志
+            song.isFromKw = true;
+
+            // 生成唯一键
+            const songKey = `kw_${song.id}`;
+            if (!this.combinedSongIds.has(songKey)) {
+              fallbackApiSongs.push(song); // 添加到备用API歌曲数组
+              this.combinedSongIds.add(songKey);
+              fallbackAdded++;
+            }
+          }
+
+        }
+
+        // 然后再从主API加载更多
+        let mainAdded = 0;
+        if (this.mainApiHasMore) {
+          const mainSongs = await this._searchSongsFromMainApi(searchKeywords, limit, this.mainApiOffset);
+
+          // 更新主API歌曲列表
+          this.mainApiSongs = [...this.mainApiSongs, ...mainSongs];
+
+          // 添加主API的歌曲（去重）
+          for (const song of mainSongs) {
+            // 确保每首歌曲都标记非备用API
+            song.isFromKwApi = false;
+
+            // 生成唯一键
+            const songKey = `main_${song.id}`;
+            if (!this.combinedSongIds.has(songKey)) {
+              mainApiSongs.push(song); // 添加到主API歌曲数组
+              this.combinedSongIds.add(songKey);
+              mainAdded++;
+            }
+          }
+
+        }
+
+        // 合并歌曲列表，确保酷我API的歌曲在前面
+        const combinedSongs = [...fallbackApiSongs, ...mainApiSongs];
+
+        // 如果合并后的歌曲列表为空，但API返回了结果，可能是合并逻辑有问题
+        if (combinedSongs.length === 0 && (fallbackAdded > 0 || mainAdded > 0)) {
+          console.error(`[PlayerStore] 错误: 加载更多时合并后歌曲为0，但API返回了结果 (备用API: ${fallbackAdded}, 主API: ${mainAdded})`);
+
+          // 直接使用备用API的结果
+          if (fallbackAdded > 0) {
+            const fallbackSongs = this.fallbackApiSongs.slice(-fallbackAdded);
+            // 追加到当前播放列表
+            this.setPlaylist([...this.playlist, ...fallbackSongs], false);
+
+            // 更新搜索状态
+            this.isSearching = false;
+
+            return this.mainApiHasMore || this.fallbackApiHasMore;
+          }
+
+          // 如果备用API没有结果，使用主API的结果
+          if (mainAdded > 0) {
+            const mainSongs = this.mainApiSongs.slice(-mainAdded);
+            // 追加到当前播放列表
+            this.setPlaylist([...this.playlist, ...mainSongs], false);
+
+            // 更新搜索状态
+            this.isSearching = false;
+
+            return this.mainApiHasMore || this.fallbackApiHasMore;
+          }
+        }
+
+        if (combinedSongs.length > 0) {
+          // 追加到当前播放列表，而不是替换
+          this.setPlaylist([...this.playlist, ...combinedSongs], false);
+        }
+
+        // 更新搜索状态
+        this.isSearching = false;
+
+        // 返回是否还有更多歌曲可加载
+        return this.mainApiHasMore || this.fallbackApiHasMore;
+      } catch (error) {
+        console.error(`[PlayerStore] 加载更多歌曲失败:`, error);
+        this.isSearching = false;
+        return false;
+      }
+    },
+
+    /**
+     * 处理歌曲播放结束事件。
+     */
+    async handleSongEnd() {
+      // 重置预加载标志
+      this._hasPreloadedBeforeEnd = false;
+
+      if (this.playbackMode === 'single') {
+        this.currentTime = 0;
+        this.isPlaying = true; // 重新播放当前歌曲
+        // 对于单曲循环，可能需要重新触发audio.play()，这通常在组件层面处理
+      } else if (this.playbackMode === 'shuffle') {
+        if (this.playlist.length > 0) {
+          let randomIndex = Math.floor(Math.random() * this.playlist.length);
+          // 确保不是同一首歌（除非列表只有一首歌）
+          if (this.playlist.length > 1 && randomIndex === this.currentSongIndex) {
+            randomIndex = (randomIndex + 1) % this.playlist.length;
+          }
+          await this.playSong(this.playlist[randomIndex], randomIndex);
+        } else {
+          this.isPlaying = false;
+        }
+      } else { // sequential
+        await this.playNext();
+      }
+    },
+
+    /**
+     * 切换播放模式并显示提示。
+     */
+    togglePlaybackMode() {
+      const currentIndex = PLAYBACK_MODES.indexOf(this.playbackMode);
+      const nextIndex = (currentIndex + 1) % PLAYBACK_MODES.length;
+      this.playbackMode = PLAYBACK_MODES[nextIndex];
+      this.toastMessage = this.currentPlaybackModeText; // 使用getter获取文本
+      this.showPlaybackModeToast = true;
+      // 短暂显示后自动隐藏提示
+      setTimeout(() => {
+        this.showPlaybackModeToast = false;
+      }, 1500); // 显示1.5秒
+      // 如果切换到单曲循环且当前有歌曲，预加载逻辑可能需要调整，暂时不动
+      // 如果从单曲循环切换走，且当前有歌曲，可能需要触发一次预加载
+      if (PLAYBACK_MODES[currentIndex] === 'single' && this.playbackMode !== 'single' && this.currentSong) {
+        this.preloadNextSong();
+      }
+    },
+
+    /**
+     * 恢复保存的播放状态
+     */
+    async restoreSavedState() {
+      try {
+        // console.log('[PlayerStore] 尝试恢复保存的状态');
+
+        // 从持久化存储恢复播放状态
+        const savedState = getPlayerState();
+        if (savedState) {
+          // console.log('[PlayerStore] 从本地存储找到保存的状态');
+
+          // 恢复播放模式和音量
+          if (savedState.playbackMode && PLAYBACK_MODES.includes(savedState.playbackMode)) {
+            this.playbackMode = savedState.playbackMode;
+          }
+
+          if (typeof savedState.volume === 'number' && savedState.volume >= 0 && savedState.volume <= 1) {
+            this.volume = savedState.volume;
+          }
+
+          // 尝试恢复播放列表和当前歌曲
+          if (savedState.currentSongId) {
+            // console.log(`[PlayerStore] 尝试恢复歌曲ID: ${savedState.currentSongId}`);
+
+            // 先尝试从缓存恢复播放列表
+            let cachedSongs = null;
+            try {
+              cachedSongs = await dataCache.getCachedInitialSongs();
+              if (!cachedSongs && savedState.lastSearchKeyword) {
+                // 如果没有初始歌曲列表缓存，但有最后的搜索关键词，尝试恢复搜索结果
+                cachedSongs = await dataCache.getCachedSearchResults(savedState.lastSearchKeyword);
+                if (cachedSongs) {
+                  // console.log(`[PlayerStore] 从缓存恢复搜索结果: "${savedState.lastSearchKeyword}"`);
+                  this.lastSearchKeyword = savedState.lastSearchKeyword;
+                }
+              }
+            } catch (error) {
+              console.error('[PlayerStore] 从缓存恢复歌曲列表失败:', error);
+            }
+
+            if (cachedSongs && cachedSongs.length > 0) {
+              // console.log(`[PlayerStore] 从缓存恢复了 ${cachedSongs.length} 首歌曲`);
+
+              // 恢复播放列表
+              this.playlist = cachedSongs.map(song => ({
+                ...song,
+                preloadedUrl: null
+              }));
+
+              // 查找当前歌曲
+              const currentSongIndex = this.playlist.findIndex(song => song.id === savedState.currentSongId);
+
+              if (currentSongIndex !== -1) {
+                this.currentSongIndex = currentSongIndex;
+                this.currentSong = this.playlist[currentSongIndex];
+
+                // 恢复播放时间
+                if (typeof savedState.currentTime === 'number' && savedState.currentTime >= 0) {
+                  this.currentTime = savedState.currentTime;
+                  // console.log(`[PlayerStore] 恢复播放时间: ${this.formattedCurrentTime}`);
+                }
+
+                // console.log(`[PlayerStore] 成功恢复歌曲: ${this.currentSong.name}`);
+
+                // 如果歌曲URL不存在或已过期，尝试从缓存获取
+                if (!this.currentSong.url) {
+                  try {
+                    const cachedUrl = await dataCache.getCachedSongUrl(this.currentSong.id);
+                    if (cachedUrl && (cachedUrl.url || cachedUrl.directPlayUrl)) {
+                      this.currentSong.url = cachedUrl.url || cachedUrl.directPlayUrl;
+                      // console.log(`[PlayerStore] 从缓存恢复歌曲URL: ${this.currentSong.name}`);
+                    } else {
+                      // 如果缓存中没有URL，尝试重新获取
+                      await this._fetchSongUrl(this.currentSong);
+                    }
+                  } catch (error) {
+                    console.error('[PlayerStore] 恢复歌曲URL失败:', error);
+                    // 错误时尝试重新获取
+                    await this._fetchSongUrl(this.currentSong);
+                  }
+                }
+
+                // 离线模式下不自动恢复播放状态，等待用户交互
+                const isOffline = !navigator.onLine;
+                this.isPlaying = !isOffline && savedState.isPlaying === true;
+
+                // 预加载下一首歌曲
+                this.preloadNextSong();
+
+                // 恢复歌词
+                if (this.currentSong) {
+                  this.fetchLyrics(this.currentSong.id).catch(() => {
+                    // console.log('[PlayerStore] 无法获取歌词，将使用缓存或空歌词');
+                  });
+                }
+
+                return true;
+              } else {
+                // console.log('[PlayerStore] 未找到保存的歌曲ID，尝试初始化默认播放列表');
+              }
+            } else {
+              // console.log('[PlayerStore] 缓存中没有找到歌曲列表，尝试获取新数据');
+            }
+          }
+        }
+
+        // 如果没有找到保存的状态或恢复失败，尝试获取初始歌曲列表
+        if (!this.playlist || this.playlist.length === 0) {
+          await this.fetchInitialSongs();
+        }
+
+        return false;
+      } catch (error) {
+        console.error('[PlayerStore] 恢复保存的状态失败:', error);
+
+        // 出错时尝试获取初始歌曲列表
+        if (!this.playlist || this.playlist.length === 0) {
+          await this.fetchInitialSongs().catch(err => {
+            console.error('[PlayerStore] 获取初始歌曲列表失败:', err);
+          });
+        }
+
+        return false;
+      } finally {
+        // 标记数据已加载完成
+        this.isDataLoaded = true;
+      }
+    },
+
+    /**
+     * 从备用API搜索歌曲
+     * @param {string} keywords - 搜索关键词
+     * @param {number} limit - 每页数量
+     * @param {number} offset - 分页偏移量
+     * @returns {Promise<Array>} 歌曲列表
+     */
+    async _searchSongsFromFallbackApi(keywords, limit = 30, offset = 0) {
+      try {
+        // 确保关键词中没有多余的空格
+        const cleanKeywords = keywords.replace(/\s+/g, '');
+
+        // 备用API使用简单的name参数，不需要page和limit参数
+        const apiUrl = `${FALLBACK_API_BASE}?name=${encodeURIComponent(cleanKeywords)}&level=lossless`;
+        // // console.log(`[PlayerStore] 备用API搜索: 完整URL "${apiUrl}"`);
+        // // console.log(`[PlayerStore] 备用API基础URL: ${FALLBACK_API_BASE}`);
+        // // console.log(`[PlayerStore] 备用API搜索关键词(清理后): "${cleanKeywords}"`);
+
+        // 使用正确的API调用格式
+        const requestConfig = {
+          params: {
+            name: cleanKeywords,
+            level: 'lossless' // 修改为lossless无损音质
+            // 备用API不支持分页参数
+          }
+        };
+
+        // // console.log(`[PlayerStore] 备用API请求配置:`, JSON.stringify(requestConfig));
+
+        const response = await axios.get(`${FALLBACK_API_BASE}`, requestConfig);
+
+        // // console.log(`[PlayerStore] 备用API响应状态:`, response.status);
+        // // console.log(`[PlayerStore] 备用API响应头:`, JSON.stringify(response.headers));
+
+        if (response.data && response.data.code === 200 && Array.isArray(response.data.data)) {
+          // // console.log(`[PlayerStore] 备用API搜索结果: ${response.data.data.length} 首歌曲`);
+
+          // 打印第一个结果的结构，帮助调试
+          if (response.data.data.length > 0) {
+            // // console.log(`[PlayerStore] 备用API搜索结果第一首歌曲结构:`, JSON.stringify(response.data.data[0]));
+          }
+
+          const songs = response.data.data.map(song => {
+            // 使用_formatFallbackApiSong方法格式化歌曲数据
+            const formattedSong = this._formatFallbackApiSong(song);
+
+            // 确保所有URL都使用lossless
+            if (formattedSong.url) {
+              formattedSong.url = this._convertExhighToLossless(formattedSong.url);
+            }
+            if (formattedSong.lrcUrl) {
+              formattedSong.lrcUrl = this._convertExhighToLossless(formattedSong.lrcUrl);
+            }
+
+            return formattedSong;
+          });
+
+          // 备用API不支持分页，所以一次返回所有结果
+          this.fallbackApiHasMore = false;
+
+          return songs;
+        } else {
+          console.warn(`[PlayerStore] 备用API搜索无结果或格式不正确: ${cleanKeywords}, 响应:`, JSON.stringify(response.data).substring(0, 300));
+          this.fallbackApiHasMore = false;
+          return [];
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] 备用API搜索出错, 关键词: ${cleanKeywords}`, error);
+        this.fallbackApiHasMore = false;
+        return [];
+      }
+    },
+
+    /**
+     * 从主API搜索歌曲
+     * @param {string} keywords - 搜索关键词
+     * @param {number} limit - 每页数量
+     * @param {number} offset - 分页偏移量
+     * @returns {Promise<Array>} 歌曲列表
+     */
+    async _searchSongsFromMainApi(keywords, limit = 30, offset = 0) {
+      try {
+        // // console.log(`[PlayerStore] 从主API搜索歌曲: ${keywords}, 偏移: ${offset}, 限制: ${limit}`);
+        const response = await axios.get(`${MAIN_API_BASE}/search`, {
+          params: {
+            keywords,
+            limit,
+            offset,
+            type: 1
+          }
+        });
+
+        if (response.data && response.data.code === 200 && response.data.result && Array.isArray(response.data.result.songs)) {
+          const songs = response.data.result.songs.map(song => {
+            // 处理专辑封面
+            let albumArt = '';
+            if (song.album && song.album.picUrl) {
+              albumArt = song.album.picUrl;
+            } else if (song.artists && song.artists[0] && song.artists[0].img1v1Url) {
+              albumArt = song.artists[0].img1v1Url;
+            }
+
+            // 如果没有获取到有效的专辑封面，使用默认图片
+            if (!albumArt || albumArt.includes('default') || albumArt.trim() === '') {
+              albumArt = 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg';
+            }
+
+            // 格式化歌曲数据
+            const formattedSong = {
+              id: USE_ID_PREFIX ? `${MAIN_ID_PREFIX}${song.id}` : song.id, // 添加前缀以区分主API的歌曲
+              name: song.name || '未知歌曲',
+              artist: song.artists ? song.artists.map(a => a.name).join(', ') : '未知歌手',
+              album: song.album?.name || '未知专辑',
+              albumId: song.album?.id,
+              albumArt: albumArt,
+              duration: song.duration || 0,
+              isFromKw: false // 标记来源为主API
+            };
+
+            return formattedSong;
+          });
+
+          // 更新主API搜索状态
+          this.mainApiHasMore = response.data.result.hasMore !== false;
+          this.mainApiOffset = offset + songs.length;
+
+          // 添加到主API歌曲列表，用于去重
+          this.mainApiSongs = this.mainApiSongs.concat(songs);
+
+          // // console.log(`[PlayerStore] 主API搜索结果: ${songs.length} 首歌曲`);
+          return songs;
+        } else {
+          // // console.log(`[PlayerStore] 主API搜索无结果或格式不正确`);
+          this.mainApiHasMore = false;
+          return [];
+        }
+      } catch (error) {
+        console.error(`[PlayerStore] 主API搜索出错, 关键词: ${keywords}`, error);
+        this.mainApiHasMore = false;
+        return [];
+      }
+    },
+
+    /**
+     * 处理酷我API返回的歌词数据，转换为LRC格式
+     * @param {Object} kwLyricData - 酷我API返回的歌词数据
+     * @returns {string} 转换后的LRC格式歌词
+     */
+    _processKwLyrics(kwLyricData) {
+      if (!kwLyricData) {
+        console.error('[PlayerStore] 酷我歌词数据为空');
+        return '';
+      }
+
+      // // console.log('[PlayerStore] 处理酷我歌词数据:', JSON.stringify(kwLyricData).substring(0, 200) + '...');
+
+      // 检查不同的数据结构
+      let lrcContent = '';
+
+      // 情况1: 直接包含lrclist字符串
+      if (kwLyricData.data && typeof kwLyricData.data.lrclist === 'string') {
+        lrcContent = kwLyricData.data.lrclist;
+        // // console.log(`[PlayerStore] 处理酷我字符串格式歌词，长度: ${lrcContent.length}`);
+
+        // 检查是否需要处理转义字符
+        if (lrcContent.includes('\\n')) {
+          lrcContent = lrcContent.replace(/\\n/g, '\n');
+          // // console.log(`[PlayerStore] 处理歌词中的转义换行符，处理后长度: ${lrcContent.length}`);
+        }
+
+        return lrcContent;
+      }
+
+      // 情况2: 包含lrclist数组
+      if (kwLyricData.data && Array.isArray(kwLyricData.data.lrclist)) {
+        try {
+          lrcContent = kwLyricData.data.lrclist.map(line => {
+            // 如果line是字符串，可能已经是格式化的LRC行
+            if (typeof line === 'string') {
+              return line;
+            }
+
+            // 如果line是对象，需要提取time和lineLyric属性
+            if (typeof line === 'object' && line !== null) {
+              // 处理time属性
+              let timeStr = '';
+              if (line.time !== undefined) {
+                const time = parseFloat(line.time);
+                if (!isNaN(time)) {
+                  const minutes = Math.floor(time / 60).toString().padStart(2, '0');
+                  const seconds = (time % 60).toFixed(2).padStart(5, '0');
+                  timeStr = `[${minutes}:${seconds}]`;
+                }
+              }
+
+              // 处理歌词文本
+              const lyricText = line.lineLyric || '';
+              return `${timeStr}${lyricText}`;
+            }
+
+            return '';
+          }).filter(line => line.trim() !== '').join('\n');
+
+          // // console.log(`[PlayerStore] 成功处理酷我数组格式歌词，行数: ${kwLyricData.data.lrclist.length}, 结果长度: ${lrcContent.length}`);
+          return lrcContent;
+        } catch (error) {
+          console.error('[PlayerStore] 处理酷我歌词数组格式时出错:', error);
+        }
+      }
+
+      // 情况3: JSON格式返回的歌词
+      if (kwLyricData.data && kwLyricData.data.lyric) {
+        lrcContent = kwLyricData.data.lyric;
+        // // console.log(`[PlayerStore] 处理酷我JSON格式歌词，长度: ${lrcContent.length}`);
+        return lrcContent;
+      }
+
+      // 情况4: 包含lyric字符串
+      if (kwLyricData.data && typeof kwLyricData.data.lyric === 'string') {
+        lrcContent = kwLyricData.data.lyric;
+        // // console.log(`[PlayerStore] 处理酷我lyric字符串格式歌词，长度: ${lrcContent.length}`);
+        return lrcContent;
+      }
+
+      // 情况5: 包含content字符串
+      if (kwLyricData.data && typeof kwLyricData.data.content === 'string') {
+        lrcContent = kwLyricData.data.content;
+        // // console.log(`[PlayerStore] 处理酷我content字符串格式歌词，长度: ${lrcContent.length}`);
+        return lrcContent;
+      }
+
+      // 如果没有找到任何歌词内容，返回默认歌词
+      console.warn('[PlayerStore] 未能从酷我API响应中提取歌词内容');
+      return '[00:00.00]暂无歌词';
+    },
+
+    /**
+     * 播放整个歌单（播放列表）
+     * @param {Array<Object>} songsQueue - 要播放的歌曲队列
+     * @param {string|null} playlistIdContext - 当前播放列表的上下文ID (例如歌单ID)。
+     */
+    async playPlaylist(songsQueue, playlistIdContext = null) {
+      if (!songsQueue || songsQueue.length === 0) {
+        console.warn('[PlayerStore] playPlaylist: 提供的歌曲队列为空');
+        // 可以选择弹出一个提示给用户
+        // this.toastMessage = '歌单为空，无法播放';
+        // this.showPlaybackModeToast = true;
+        // setTimeout(() => { this.showPlaybackModeToast = false; }, 1500);
+        return;
+      }
+
+      // // console.log(`[PlayerStore] playPlaylist: 接收到包含 ${songsQueue.length} 首歌曲的歌单, 上下文ID: ${playlistIdContext}`);
+
+      // 1. 设置播放列表
+      // true 表示替换现有播放列表
+      // false 表示非来自缓存（因此会触发缓存更新，如果适用）
+      this.setPlaylist(songsQueue, true, false);
+
+      // 2. 播放第一首歌曲
+      // 确保 setPlaylist 完成后，playlist 和 currentSongIndex 已更新
+      if (this.playlist.length > 0) {
+        // playSong 方法的第二个参数可以是索引，也可以是包含索引和完整队列的对象
+        // 这里我们已经通过 setPlaylist 更新了整个播放列表，所以只需要传递索引0
+        // playSong 方法内部会处理 currentSong 和 currentSongIndex 的设置
+        await this.playSong(this.playlist[0], 0, playlistIdContext);
+      } else {
+        console.error('[PlayerStore] playPlaylist: 设置播放列表后，列表仍然为空，无法播放。');
+      }
+    },
+
+    /**
+     * 从网易云API返回的歌词数据中提取专辑图片URL
+     * @param {Object} lyricsData - 网易云API返回的歌词数据
+     * @returns {string|null} 提取到的专辑图片URL，如果没有则返回null
+     */
+    _extractAlbumArtFromNeteaseLyrics(lyricsData) {
+      if (!lyricsData) return null;
+
+      try {
+        // 1. 首先检查直接的picUrl字段
+        if (lyricsData.picUrl) {
+          return this._convertHttpToHttps(lyricsData.picUrl);
+        }
+
+        // 2. 检查al对象
+        if (lyricsData.al && lyricsData.al.picUrl) {
+          return this._convertHttpToHttps(lyricsData.al.picUrl);
+        }
+
+        // 3. 从歌词文本中提取图片URL
+        const lyricText = lyricsData.lrc?.lyric || '';
+        const imgUrlMatches = lyricText.match(/https?:\/\/[^"'\s)]+\.(?:jpg|jpeg|png|gif)/g);
+        if (imgUrlMatches && imgUrlMatches.length > 0) {
+          // 优先选择包含album的URL作为专辑图片
+          const url = imgUrlMatches.find(url => url.includes('album')) || imgUrlMatches[0];
+          return this._convertHttpToHttps(url);
+        }
+
+        // 4. 从整个响应中提取图片URL
+        const responseStr = JSON.stringify(lyricsData);
+        const picUrlMatches = responseStr.match(/http[^"',\s]+\.(jpg|jpeg|png|gif)/g);
+        if (picUrlMatches && picUrlMatches.length > 0) {
+          // 优先选择包含album的URL作为专辑图片
+          const url = picUrlMatches.find(url => url.includes('album')) || picUrlMatches[0];
+          return this._convertHttpToHttps(url);
+        }
+      } catch (e) {
+        console.error('[PlayerStore] 从网易云歌词提取专辑图片URL失败:', e);
+      }
+
+      return null;
+    },
+
+    /**
+     * 将HTTP图片URL转换为HTTPS
+     * @param {string} url - 图片URL
+     * @returns {string} - 转换后的URL
+     * @private
+     */
+    _convertHttpToHttps(url) {
+      if (!url) return url;
+
+      // 处理网易云域名
+      if (url.startsWith('http://') &&
+        (url.includes('.music.126.net') ||
+          url.includes('.music.127.net') ||
+          url.includes('p1.music.126.net') ||
+          url.includes('p2.music.126.net') ||
+          url.includes('p3.music.126.net') ||
+          url.includes('p4.music.126.net'))) {
+        console.log('[PlayerStore] 转换HTTP图片URL为HTTPS:', url);
+        return url.replace('http://', 'https://');
+      }
+
+      return url;
+    }
+  }
+});

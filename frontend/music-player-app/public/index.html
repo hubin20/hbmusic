@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1d1f23">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="HBMusic - 一个优雅的音乐播放器">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+  <title>HBMusic</title>
+  <link rel="icon" href="/favicon.ico">
+  <script>
+    // 监测混合内容
+    window.addEventListener('DOMContentLoaded', function() {
+      // 创建混合内容检测器
+      function detectMixedContent() {
+        const images = document.querySelectorAll('img');
+        const videos = document.querySelectorAll('video');
+        const audios = document.querySelectorAll('audio');
+        let mixedContentFound = false;
+        
+        function checkSrc(element, type) {
+          if (element.src && element.src.startsWith('http://')) {
+            console.warn(`[混合内容检测] 发现HTTP ${type} 资源: ${element.src}`);
+            mixedContentFound = true;
+            
+            // 高亮显示有问题的元素
+            element.style.border = '2px solid red';
+            
+            // 自动转换为HTTPS (仅用于测试)
+            if (window.location.protocol === 'https:') {
+              const httpsUrl = element.src.replace('http://', 'https://');
+              console.info(`[混合内容检测] 尝试转换为: ${httpsUrl}`);
+              element.src = httpsUrl;
+            }
+          }
+        }
+        
+        images.forEach(img => checkSrc(img, '图片'));
+        videos.forEach(video => checkSrc(video, '视频'));
+        audios.forEach(audio => checkSrc(audio, '音频'));
+        
+        if (mixedContentFound) {
+          console.error('[混合内容检测] 页面上发现HTTP资源，已自动转换为HTTPS');
+        } else {
+          console.info('[混合内容检测] 未发现混合内容，页面安全');
+        }
+      }
+      
+      // 初始检测
+      setTimeout(detectMixedContent, 2000);
+      
+      // 监听路由变化或DOM变化后再次检测
+      setInterval(detectMixedContent, 5000);
+    });
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
+  <script>
+    // 处理Android返回键
+    document.addEventListener('backbutton', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      // 如果有打开的模态框，先关闭模态框
+      if (window.closeActiveModal && typeof window.closeActiveModal === 'function') {
+        window.closeActiveModal();
+        return;
+      }
+      
+      // 如果当前在首页，显示提示而不是退出
+      const currentPath = window.location.pathname;
+      if (currentPath === '/' || currentPath === '/index.html') {
+        // 显示"再按一次退出"提示
+        if (!window.backButtonPressedOnce) {
+          window.backButtonPressedOnce = true;
+          window.showToast && window.showToast('再按一次退出应用');
+          
+          // 2秒内再次点击才退出
+          setTimeout(function() {
+            window.backButtonPressedOnce = false;
+          }, 2000);
+        } else {
+          // 用户在2秒内再次点击，最小化应用而不是退出
+          // 这里使用navigator.app.exitApp()不会真正退出，而是最小化
+          if (navigator.app && navigator.app.exitApp) {
+            navigator.app.exitApp();
+          }
+        }
+      } else {
+        // 不在首页时，返回上一页
+        window.history.back();
+      }
+    }, false);
+    
+    // 注册Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/service-worker.js')
+          .then(function(registration) {
+            console.log('ServiceWorker 注册成功: ', registration.scope);
+          })
+          .catch(function(error) {
+            console.log('ServiceWorker 注册失败: ', error);
+          });
+      });
+    }
+  </script>
+</body>
+</html> 

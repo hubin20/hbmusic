@@ -1,0 +1,34 @@
+@import './base.css';
+
+/* 
+  #app 相关的特定布局样式已在 App.vue 中处理或不再需要，
+  因为我们采用了基于 flexbox 的全屏布局。
+*/
+
+/* 保留一些通用的链接样式，但颜色可能需要根据背景调整 */
+a,
+.link-highlight {
+  text-decoration: none;
+  /* 之前是 hsla(160, 100%, 37%, 1) - 绿色，对于深色背景可能不明显 */
+  /* 使用 base.css 中的变量或自定义一个更适合的颜色 */
+  color: var(--vt-c-indigo); /* 这是一个深蓝色，在亮色背景上好看 */
+  /* 如果您的背景图很暗，可能需要一个更亮的链接颜色，例如： */
+  /* color: var(--vt-c-white-soft); */
+  transition: 0.3s;
+  /* padding: 3px; */ /* 内边距可能导致布局问题，谨慎使用 */
+}
+
+@media (hover: hover) {
+  a:hover,
+  .link-highlight:hover {
+    /* background-color: hsla(160, 100%, 37%, 0.2); */
+    /* 使用更通用的 hover 效果，例如改变亮度或下划线 */
+    filter: brightness(1.2);
+    text-decoration: underline;
+  }
+}
+
+/* 
+  移除了 @media (min-width: 1024px) 中针对 body 和 #app 的特定布局，
+  因为 App.vue 控制了整体布局。
+*/

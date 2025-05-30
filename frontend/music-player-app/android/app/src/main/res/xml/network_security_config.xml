@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 允许加载HTTP图片内容 -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <!-- 特别允许music.126.net域名的明文流量 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">music.126.net</domain>
+        <domain includeSubdomains="true">music.127.net</domain>
+        <domain includeSubdomains="true">p1.music.126.net</domain>
+        <domain includeSubdomains="true">p2.music.126.net</domain>
+        <domain includeSubdomains="true">p3.music.126.net</domain>
+        <domain includeSubdomains="true">p4.music.126.net</domain>
+    </domain-config>
+</network-security-config> 

@@ -1,0 +1,37 @@
+{
+  "appId": "com.ymmusic.app",
+  "appName": "YMMusic",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "webContentsDebuggingEnabled": true,
+    "allowMixedContent": true,
+    "backgroundColor": "#121212",
+    "allowBackup": true,
+    "overrideUserAgent": false,
+    "minSdkVersion": 22,
+    "targetSdkVersion": 32,
+    "hideLogs": false,
+    "contentInset": "always",
+    "contentInsetAdjustmentBehavior": "always"
+  },
+  "plugins": {
+    "CapacitorKeepAwake": {
+      "enable": true
+    },
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#121212",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "BackgroundAudio": {
+      "enable": true
+    }
+  }
+}

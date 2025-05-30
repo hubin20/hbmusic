@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">YMMusic</string>
+    <string name="title_activity_main">YMMusic</string>
+    <string name="package_name">com.ymmusic.app</string>
+    <string name="custom_url_scheme">com.ymmusic.app</string>
+</resources>
