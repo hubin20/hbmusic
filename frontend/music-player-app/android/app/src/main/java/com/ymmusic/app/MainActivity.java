@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
+import android.app.Activity;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -44,6 +45,17 @@ public class MainActivity extends BridgeActivity {
         
         // 启动音乐播放服务
         startMusicService();
+    }
+    
+    /**
+     * 重写返回键行为，使应用最小化而不是退出
+     * 这样音乐可以在后台继续播放
+     */
+    @Override
+    public void onBackPressed() {
+        Log.d(TAG, "返回键被按下: 最小化应用而不是退出");
+        // 移动应用到后台而不是结束它
+        moveTaskToBack(true);
     }
     
     @Override

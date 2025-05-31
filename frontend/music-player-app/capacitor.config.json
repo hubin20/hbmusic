@@ -15,7 +15,11 @@
     "targetSdkVersion": 32,
     "hideLogs": false,
     "contentInset": "always",
-    "contentInsetAdjustmentBehavior": "always"
+    "contentInsetAdjustmentBehavior": "always",
+    "backgroundMode": [
+      "audio"
+    ],
+    "minimizeBackground": true
   },
   "plugins": {
     "CapacitorKeepAwake": {
