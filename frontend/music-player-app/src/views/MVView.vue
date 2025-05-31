@@ -255,22 +255,14 @@ const fetchNeteaseMVDetail = async (mvId) => {
         throw new Error('获取MV播放地址失败');
       }
       
-      // 获取相关MV
-      const relatedResponse = await axios.get(`${BASE_URL}/related/mv`, {
-        params: { id: mvId }
-      });
-      
-      if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.mvs)) {
-        relatedMVs.value = relatedResponse.data.mvs.map(item => ({
-          id: item.id,
-          name: item.name || '未知MV',
-          artistName: item.artistName || '未知歌手',
-          cover: convertHttpToHttps(item.cover || defaultCoverUrl),
-          isFromKw: false
-        }));
-      } else {
-        relatedMVs.value = [];
-      }
+      // 设置相关MV与主MV相同
+      relatedMVs.value = [{
+        id: mvData.id,
+        name: mvData.name || '未知MV',
+        artistName: mvData.artistName || '未知歌手',
+        cover: convertHttpToHttps(mvData.cover || defaultCoverUrl),
+        isFromKw: false
+      }];
       
       // 缓存MV数据
       mvCache.value[`main_mv_${mvId}`] = {
@@ -413,28 +405,18 @@ const fetchKwMVDetail = async (mvId) => {
       mvUrl.value = `${KW_API_URL}?id=${mvId}&level=2k&type=mv&format=mp4`;
       
       // 获取相关MV
-      try {
-        const relatedResponse = await axios.get(`${KW_API_URL}`, { 
-          params: { 
-            id: mvData.artistid || '236742508', // 使用歌手ID获取相关MV，如果没有则使用默认ID
-            page: 1,
-            limit: 6,
-            type: 'mvList'
-          } 
-        });
-        
-        if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.data)) {
-          relatedMVs.value = relatedResponse.data.data.map(item => ({
-            id: item.rid || item.vid,
-            name: item.name || '未知MV',
-            artistName: item.artist || '未知歌手',
-            cover: convertHttpToHttps(item.pic || defaultCoverUrl),
-            isFromKw: true
-          }));
-        }
-      } catch (relatedErr) {
-        console.error('获取酷我相关MV失败:', relatedErr);
-        relatedMVs.value = [];
+      const relatedResponse = await axios.get(`${KW_API_URL}/mv/url`, {
+        params: { id: mvId }
+      });
+      
+      if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.data)) {
+        relatedMVs.value = relatedResponse.data.data.map(item => ({
+          id: item.id,
+          name: item.name || '未知MV',
+          artistName: item.artistName || '未知歌手',
+          cover: convertHttpToHttps(item.cover || defaultCoverUrl),
+          isFromKw: true
+        }));
       }
       
       // 缓存MV数据
