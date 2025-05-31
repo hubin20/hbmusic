@@ -150,7 +150,6 @@ export const usePlayerStore = defineStore('player', {
       let url = null;
       if (song.url && typeof song.url === 'string' && song.url.startsWith('http')) {
         url = this._convertExhighToLossless(song.url);
-        //// // console.log(`[PlayerStore] _formatFallbackApiSong: 使用API返回的直接URL: ${url.substring(0, 100)}...`);
       }
 
       // 构建格式化的歌曲对象
@@ -1772,37 +1771,59 @@ export const usePlayerStore = defineStore('player', {
         let neteaseSongs = [];
         let kwSongs = [];
 
-        // 1. 获取酷我热门歌曲（放在前面）
+        // 1. 获取酷我飙升榜和新歌榜（放在前面）
         try {
-          // 直接获取酷我热门歌曲，使用正确的API格式
-          const kwResponse = await axios.get(`${FALLBACK_API_BASE}`, {
-            params: { type: 'hotSong' }
-          });
+          // 定义要获取的榜单
+          const kwRankings = [
+            { name: '飙升榜', type: 'rank' },
+            { name: '新歌榜', type: 'rank' }
+          ];
 
-          if (kwResponse.data && kwResponse.data.code === 200 && Array.isArray(kwResponse.data.data)) {
-            const kwHotSongs = kwResponse.data.data;
-            console.log(`[PlayerStore] fetchInitialSongs: 成功获取酷我热门歌曲，数量: ${kwHotSongs.length}`);
+          // 按顺序获取每个榜单数据
+          for (const ranking of kwRankings) {
+            try {
+              console.log(`[PlayerStore] fetchInitialSongs: 正在获取酷我${ranking.name}...`);
+              // 使用正确的URL格式调用API
+              const kwResponse = await axios.get(`${FALLBACK_API_BASE}`, {
+                params: {
+                  name: ranking.name,
+                  type: ranking.type
+                }
+              });
 
-            // 格式化酷我热门歌曲
-            const formattedKwSongs = kwHotSongs.map(song => {
-              const formattedSong = this._formatFallbackApiSong(song);
-              formattedSong.isFromKw = true;
-              formattedSong.source = 'kw';
-              formattedSong.sourceType = '酷我热门歌曲';
-              return formattedSong;
-            });
+              if (kwResponse.data && kwResponse.data.code === 200 && kwResponse.data.data && kwResponse.data.data.musicList) {
+                const rankingSongs = kwResponse.data.data.musicList;
+                console.log(`[PlayerStore] fetchInitialSongs: 成功获取酷我${ranking.name}，数量: ${rankingSongs.length}`);
 
-            // 保存酷我歌曲列表
-            kwSongs = formattedKwSongs;
+                // 格式化榜单歌曲
+                const formattedRankingSongs = rankingSongs.map(song => {
+                  return this._formatKwRankingSong(song, ranking.name);
+                });
 
-            // 将酷我歌曲设置为播放列表
-            if (formattedKwSongs.length > 0) {
-              this.setPlaylist(formattedKwSongs, true, false); // replace=true, fromCache=false
-              hasKwSongs = true;
-              console.log(`[PlayerStore] fetchInitialSongs: 已设置酷我热门歌曲为播放列表，共 ${formattedKwSongs.length} 首歌曲`);
+                // 添加到酷我歌曲列表
+                kwSongs = [...kwSongs, ...formattedRankingSongs];
+
+                // 如果这是第一个获取到的榜单，则设置为播放列表
+                if (!hasKwSongs && formattedRankingSongs.length > 0) {
+                  this.setPlaylist(formattedRankingSongs, true, false); // replace=true, fromCache=false
+                  hasKwSongs = true;
+                  console.log(`[PlayerStore] fetchInitialSongs: 已设置酷我${ranking.name}为播放列表，共 ${formattedRankingSongs.length} 首歌曲`);
+                } else if (hasKwSongs && formattedRankingSongs.length > 0) {
+                  // 如果已经有歌曲，则将新榜单歌曲追加到播放列表末尾
+                  this.setPlaylist([...this.playlist, ...formattedRankingSongs], false, false);
+                  console.log(`[PlayerStore] fetchInitialSongs: 已将酷我${ranking.name}追加到播放列表末尾，共 ${formattedRankingSongs.length} 首歌曲`);
+                }
+              } else {
+                console.warn(`[PlayerStore] fetchInitialSongs: 酷我${ranking.name}API返回格式不正确`);
+              }
+            } catch (rankError) {
+              console.error(`[PlayerStore] fetchInitialSongs: 获取酷我${ranking.name}失败:`, rankError);
             }
-          } else {
-            console.warn('[PlayerStore] fetchInitialSongs: 酷我热门歌曲API返回格式不正确，尝试使用备用方法');
+          }
+
+          // 如果没有成功获取到榜单数据，尝试获取热门搜索关键词对应的歌曲
+          if (kwSongs.length === 0) {
+            console.warn('[PlayerStore] fetchInitialSongs: 未能获取到酷我榜单，尝试使用备用方法获取热门歌曲');
 
             // 备用方法：获取热门搜索关键词，然后只获取每个关键词的第一首歌曲
             const kwKeywordResponse = await axios.get(FALLBACK_API_BASE, {
@@ -1866,8 +1887,8 @@ export const usePlayerStore = defineStore('player', {
                 return formattedSong;
               });
 
-              // 保存酷我歌曲列表
-              kwSongs = formattedKwSongs;
+              // 添加到酷我歌曲列表
+              kwSongs = [...kwSongs, ...formattedKwSongs];
 
               // 处理尚未添加到播放列表的歌曲
               const remainingSongs = formattedKwSongs.slice(-(formattedKwSongs.length % 5));
@@ -1888,7 +1909,7 @@ export const usePlayerStore = defineStore('player', {
             }
           }
         } catch (kwError) {
-          console.error('[PlayerStore] fetchInitialSongs: 获取酷我热门歌曲失败:', kwError);
+          console.error('[PlayerStore] fetchInitialSongs: 获取酷我榜单失败:', kwError);
         }
 
         // 2. 获取网易云每日推荐（放在后面）
@@ -2779,6 +2800,79 @@ export const usePlayerStore = defineStore('player', {
       }
 
       return url;
-    }
+    },
+
+    /**
+     * 格式化酷我榜单中的歌曲数据
+     * @param {Object} song - 榜单API返回的歌曲对象
+     * @param {string} rankName - 榜单名称
+     * @returns {Object} 格式化后的歌曲对象
+     */
+    _formatKwRankingSong(song, rankName) {
+      if (!song) return null;
+
+      // 提取歌手名称
+      let artistName = song.artist || '未知艺术家';
+
+      // 处理ID，添加前缀
+      let songId = song.rid || song.id;
+      if (USE_ID_PREFIX && songId) {
+        songId = `${KW_ID_PREFIX}${songId}`;
+      }
+
+      // 确保专辑封面URL可用
+      let albumArt = song.pic || '';
+      // 如果没有封面或封面URL不可用，使用默认封面
+      if (!albumArt || albumArt.trim() === '') {
+        albumArt = DEFAULT_ALBUM_ART;
+      }
+
+      // 榜单歌曲通常有lrc字段，内部有歌词URL
+      let lrcUrl = null;
+      if (song.lrc && typeof song.lrc === 'string' && song.lrc.startsWith('http')) {
+        lrcUrl = this._convertExhighToLossless(song.lrc);
+      }
+
+      // 榜单歌曲通常在url字段中保存歌曲直链
+      let url = null;
+      if (song.url && typeof song.url === 'string' && song.url.startsWith('http')) {
+        url = this._convertExhighToLossless(song.url);
+      }
+
+      // 处理时长格式
+      let duration = 0;
+      if (song.interval && typeof song.interval === 'string') {
+        // 将"01:31"格式转换为秒数
+        const parts = song.interval.split(':');
+        if (parts.length === 2) {
+          const minutes = parseInt(parts[0], 10);
+          const seconds = parseInt(parts[1], 10);
+          duration = (minutes * 60 + seconds) * 1000; // 转换为毫秒
+        }
+      } else if (song.duration) {
+        duration = song.duration;
+      }
+
+      // 构建格式化的歌曲对象
+      return {
+        id: songId,
+        rid: song.rid || song.id,
+        name: song.name || '未知歌曲',
+        artist: artistName,
+        album: song.album || `酷我${rankName || '榜单'}`,
+        albumId: null,
+        albumArt: albumArt,
+        duration: duration,
+        lyricist: artistName,
+        composer: artistName,
+        isFromKw: true,
+        source: 'kw',
+        sourceType: `酷我${rankName || '榜单'}`,
+        ranking: rankName || '榜单',
+        originalData: song,
+        url: url,
+        lrcUrl: lrcUrl
+      };
+    },
   }
 });
