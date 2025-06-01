@@ -55,6 +55,7 @@ export const usePlayerStore = defineStore('player', {
 
     // 新增状态：用于解决歌曲切换时的播放问题
     isLoadingNewSong: false, // 是否正在加载新歌曲
+    _tempSearchResults: null, // 临时存储搜索结果，以便在不替换播放列表时恢复
   }),
   getters: {
     /**
@@ -177,6 +178,16 @@ export const usePlayerStore = defineStore('player', {
      * @param {boolean} fromCache - 是否来自缓存，用于避免再次缓存
      */
     setPlaylist(songs, replaceExisting = true, fromCache = false) {
+      if (!songs || !Array.isArray(songs)) {
+        console.error('[PlayerStore] setPlaylist: 提供的歌曲列表无效');
+        return;
+      }
+
+      // 如果完全替换播放列表，重置所有搜索相关状态
+      if (replaceExisting) {
+        this.resetSearchState();
+      }
+
       // 格式化歌曲数据，确保有必要的字段
       const formattedSongs = songs.map(song => ({
         ...song,
@@ -2043,22 +2054,50 @@ export const usePlayerStore = defineStore('player', {
     },
 
     /**
-     * 根据关键词搜索歌曲并更新播放列表。
-     * 先从备用API获取歌曲，然后再从主API获取，并将结果合并，备用API结果优先。
+     * 搜索歌曲并更新播放列表
      * @param {string} keywords - 搜索关键词。
-     * @param {boolean} resetPagination - 是否重置分页信息，默认为true。
+     * @param {boolean} resetPagination - 是否重置分页状态，默认为true。
      * @param {boolean} useCache - 是否使用缓存，默认为true。
      * @param {boolean} skipCache - 是否跳过缓存，默认为false。
+     * @param {boolean} replacePlaylist - 是否替换当前播放列表，默认为false。
      * @returns {Promise<Array>} 合并后的歌曲列表。
      */
-    async searchSongs(keywords, resetPagination = true, useCache = true, skipCache = false) {
+    async searchSongs(keywords, resetPagination = true, useCache = true, skipCache = false, replacePlaylist = false) {
       const originalCombinedSongIdsSize = this.combinedSongIds?.size; // 用于日志
+
+      // 保存当前播放状态，以便在不替换播放列表时恢复
+      const currentSong = this.currentSong;
+      const currentSongIndex = this.currentSongIndex;
+      const wasPlaying = this.isPlaying;
+
+      // 如果需要重置分页，彻底重置所有相关状态
+      if (resetPagination) {
+        this.mainApiOffset = 0;
+        this.fallbackApiOffset = 0;
+        this.mainApiHasMore = true; // 假定重置后有更多
+        this.fallbackApiHasMore = true; // 假定重置后有更多
+        this.mainApiSongs = [];
+        this.fallbackApiSongs = [];
+        this.combinedSongIds = new Set();
+        // 确保清空临时搜索结果
+        this._tempSearchResults = [];
+        console.log(`[PlayerStore] searchSongs: 彻底重置分页状态和搜索结果`);
+      }
 
       // 1. 缓存检查 (如果命中缓存且 resetPagination=true, 需要正确初始化分页状态和IDs)
       if (useCache && !skipCache) {
         const cachedResults = dataCache.getCachedSearchResults(keywords);
         if (cachedResults) {
-          this.setPlaylist(cachedResults, true, true); // replace=true, fromCache=true
+          // 只有在需要替换播放列表时才替换
+          if (replacePlaylist) {
+            this.setPlaylist(cachedResults, true, true); // replace=true, fromCache=true
+          } else {
+            // 仅更新搜索结果，不替换播放列表
+            // 这里我们只需要获取搜索结果，不需要更新播放列表
+            // 将缓存结果存储在临时变量中供调用者使用
+            this._tempSearchResults = cachedResults;
+          }
+
           this.lastSearchKeyword = keywords;
 
           // 如果是从缓存加载，并且是"重置"类型的调用，需要更新分页和ID集合以反映缓存状态
@@ -2072,7 +2111,15 @@ export const usePlayerStore = defineStore('player', {
             this.fallbackApiHasMore = true;
             this.combinedSongIds = new Set(cachedResults.map(s => s.isFromKw ? `kw_${s.id}` : `main_${s.id}`));
           }
-          return this.playlist; // 返回当前播放列表
+
+          // 如果不替换播放列表，恢复之前的播放状态
+          if (!replacePlaylist && currentSong) {
+            this.currentSong = currentSong;
+            this.currentSongIndex = currentSongIndex;
+            this.isPlaying = wasPlaying;
+          }
+
+          return replacePlaylist ? this.playlist : this._tempSearchResults; // 返回当前播放列表或临时搜索结果
         }
       }
 
@@ -2147,16 +2194,31 @@ export const usePlayerStore = defineStore('player', {
 
         // 6. 更新 Store 状态
         if (resetPagination) {
-          this.setPlaylist(newSongsThisCall, true, false); // true for replaceExisting
+          // 只有在需要替换播放列表时才替换
+          if (replacePlaylist) {
+            this.setPlaylist(newSongsThisCall, true, false); // true for replaceExisting
+          } else {
+            // 仅存储搜索结果，不替换播放列表
+            this._tempSearchResults = newSongsThisCall;
+          }
+
           this.mainApiSongs = newMainSongsThisCall.slice(); // 使用修改后的变量名
           this.fallbackApiSongs = newFallbackSongsThisCall.slice(); // 使用修改后的变量名
           this.combinedSongIds = new Set(localSongIdCache); // 使用本次调用最终的ID集合
+
           if (newSongsThisCall.length > 0) { // 只有当实际获取到歌曲时才缓存
             dataCache.cacheSearchResults(keywords, newSongsThisCall);
           }
         } else { // 加载更多
           if (newSongsThisCall.length > 0) {
-            this.setPlaylist([...this.playlist, ...newSongsThisCall], false, false); // false for replaceExisting
+            // 只有在需要替换播放列表时才更新播放列表
+            if (replacePlaylist) {
+              this.setPlaylist([...this.playlist, ...newSongsThisCall], false, false); // false for replaceExisting
+            } else {
+              // 仅更新临时搜索结果，不影响播放列表
+              this._tempSearchResults = [...(this._tempSearchResults || []), ...newSongsThisCall];
+            }
+
             this.mainApiSongs.push(...newMainSongsThisCall); // 使用修改后的变量名
             this.fallbackApiSongs.push(...newFallbackSongsThisCall); // 使用修改后的变量名
             this.combinedSongIds = new Set(localSongIdCache); // 更新为最新的完整集合
@@ -2166,11 +2228,27 @@ export const usePlayerStore = defineStore('player', {
 
         this.lastSearchKeyword = keywords;
         this.isSearching = false;
-        return newSongsThisCall; // 返回本次调用获取的新歌，或者也可以返回 this.playlist
+
+        // 如果不替换播放列表，恢复之前的播放状态
+        if (!replacePlaylist && currentSong) {
+          this.currentSong = currentSong;
+          this.currentSongIndex = currentSongIndex;
+          this.isPlaying = wasPlaying;
+        }
+
+        return replacePlaylist ? this.playlist : (this._tempSearchResults || []); // 返回本次调用获取的新歌，或者也可以返回 this.playlist
 
       } catch (error) {
         console.error(`[PlayerStore] 搜索歌曲 "${keywords}" 时出错:`, error);
         this.isSearching = false;
+
+        // 如果不替换播放列表，恢复之前的播放状态
+        if (!replacePlaylist && currentSong) {
+          this.currentSong = currentSong;
+          this.currentSongIndex = currentSongIndex;
+          this.isPlaying = wasPlaying;
+        }
+
         // 即使出错，也应该重置分页标记吗？或者保留，以便用户可以重试"加载更多"？
         // 暂时不修改分页标记，允许用户重试。
         return []; // 返回空数组表示出错或无结果
@@ -2192,9 +2270,10 @@ export const usePlayerStore = defineStore('player', {
      * 加载更多歌曲
      * @param {string} keywords - 搜索关键词，如果不提供则使用上次的搜索关键词
      * @param {number} limit - 每次加载的数量
+     * @param {boolean} replacePlaylist - 是否替换当前播放列表，默认为false
      * @returns {Promise<boolean>} - 是否还有更多歌曲可加载
      */
-    async loadMoreSongs(keywords = null, limit = 30) {
+    async loadMoreSongs(keywords = null, limit = 30, replacePlaylist = false) {
       // 如果没有提供关键词，使用上次搜索的关键词
       // 如果lastSearchKeyword也为空，则无法加载更多
       const searchKeywords = keywords || this.lastSearchKeyword;
@@ -2210,10 +2289,19 @@ export const usePlayerStore = defineStore('player', {
         this.lastSearchKeyword = searchKeywords;
       }
 
+      // 输出当前API状态
+      console.log(`[PlayerStore] loadMoreSongs: 关键词=${searchKeywords}, 主API偏移=${this.mainApiOffset}, 备用API偏移=${this.fallbackApiOffset}, 主API还有更多=${this.mainApiHasMore}, 备用API还有更多=${this.fallbackApiHasMore}`);
+
       // 如果两个API都没有更多结果，直接返回false
       if (!this.mainApiHasMore && !this.fallbackApiHasMore) {
+        console.log('[PlayerStore] loadMoreSongs: 两个API都没有更多结果，返回false');
         return false;
       }
+
+      // 保存当前播放状态，确保加载更多后不会中断当前播放
+      const currentSongId = this.currentSong?.id;
+      const currentSongIndex = this.currentSongIndex;
+      const wasPlaying = this.isPlaying;
 
       // 设置搜索状态
       this.isSearching = true;
@@ -2245,6 +2333,11 @@ export const usePlayerStore = defineStore('player', {
             }
           }
 
+          // 更新备用API的偏移量
+          this.fallbackApiOffset += fallbackSongs.length;
+
+          // 更新是否还有更多结果
+          this.fallbackApiHasMore = fallbackSongs.length >= limit;
         }
 
         // 然后再从主API加载更多
@@ -2258,7 +2351,7 @@ export const usePlayerStore = defineStore('player', {
           // 添加主API的歌曲（去重）
           for (const song of mainSongs) {
             // 确保每首歌曲都标记非备用API
-            song.isFromKwApi = false;
+            song.isFromKw = false;
 
             // 生成唯一键
             const songKey = `main_${song.id}`;
@@ -2269,6 +2362,11 @@ export const usePlayerStore = defineStore('player', {
             }
           }
 
+          // 更新主API的偏移量
+          this.mainApiOffset += mainSongs.length;
+
+          // 更新是否还有更多结果
+          this.mainApiHasMore = mainSongs.length >= limit;
         }
 
         // 合并歌曲列表，确保酷我API的歌曲在前面
@@ -2281,11 +2379,32 @@ export const usePlayerStore = defineStore('player', {
           // 直接使用备用API的结果
           if (fallbackAdded > 0) {
             const fallbackSongs = this.fallbackApiSongs.slice(-fallbackAdded);
-            // 追加到当前播放列表
-            this.setPlaylist([...this.playlist, ...fallbackSongs], false);
+
+            // 追加到当前播放列表，但不改变当前播放状态
+            if (replacePlaylist) {
+              const newPlaylist = [...this.playlist, ...fallbackSongs];
+              this.playlist = newPlaylist;
+
+              // 恢复当前播放的歌曲和状态
+              if (currentSongId) {
+                this.currentSongIndex = newPlaylist.findIndex(song => song.id === currentSongId);
+                if (this.currentSongIndex === -1) {
+                  this.currentSongIndex = currentSongIndex;
+                }
+              }
+            } else {
+              // 仅更新临时搜索结果，不影响播放列表
+              this._tempSearchResults = [...(this._tempSearchResults || []), ...fallbackSongs];
+            }
 
             // 更新搜索状态
             this.isSearching = false;
+
+            // 如果没有新增歌曲，返回false
+            if (fallbackSongs.length === 0) {
+              console.log('[PlayerStore] 备用API没有返回新的歌曲，返回false');
+              return false;
+            }
 
             return this.mainApiHasMore || this.fallbackApiHasMore;
           }
@@ -2293,28 +2412,91 @@ export const usePlayerStore = defineStore('player', {
           // 如果备用API没有结果，使用主API的结果
           if (mainAdded > 0) {
             const mainSongs = this.mainApiSongs.slice(-mainAdded);
-            // 追加到当前播放列表
-            this.setPlaylist([...this.playlist, ...mainSongs], false);
+
+            // 追加到当前播放列表，但不改变当前播放状态
+            if (replacePlaylist) {
+              const newPlaylist = [...this.playlist, ...mainSongs];
+              this.playlist = newPlaylist;
+
+              // 恢复当前播放的歌曲和状态
+              if (currentSongId) {
+                this.currentSongIndex = newPlaylist.findIndex(song => song.id === currentSongId);
+                if (this.currentSongIndex === -1) {
+                  this.currentSongIndex = currentSongIndex;
+                }
+              }
+            } else {
+              // 仅更新临时搜索结果，不影响播放列表
+              this._tempSearchResults = [...(this._tempSearchResults || []), ...mainSongs];
+            }
 
             // 更新搜索状态
             this.isSearching = false;
+
+            // 如果没有新增歌曲，返回false
+            if (mainSongs.length === 0) {
+              console.log('[PlayerStore] 主API没有返回新的歌曲，返回false');
+              return false;
+            }
 
             return this.mainApiHasMore || this.fallbackApiHasMore;
           }
         }
 
+        // 追加到当前播放列表，但不改变当前播放状态
         if (combinedSongs.length > 0) {
-          // 追加到当前播放列表，而不是替换
-          this.setPlaylist([...this.playlist, ...combinedSongs], false);
+          // 保存旧的播放列表长度，用于更新索引
+          const oldPlaylistLength = this.playlist.length;
+
+          if (replacePlaylist) {
+            // 追加新歌曲到播放列表
+            const newPlaylist = [...this.playlist, ...combinedSongs];
+            this.playlist = newPlaylist;
+
+            // 恢复当前播放的歌曲和状态
+            if (currentSongId) {
+              // 尝试在新播放列表中找到当前歌曲
+              const newIndex = newPlaylist.findIndex(song => song.id === currentSongId);
+              if (newIndex !== -1) {
+                this.currentSongIndex = newIndex;
+              } else if (currentSongIndex < oldPlaylistLength) {
+                // 如果在新列表中找不到，但原索引有效，保持原索引
+                this.currentSongIndex = currentSongIndex;
+              }
+
+              // 恢复播放状态
+              this.isPlaying = wasPlaying;
+
+              // 如果当前正在播放，确保音频元素的状态与播放状态一致
+              if (wasPlaying) {
+                const audioElement = this._getAudioElement();
+                if (audioElement && audioElement.paused) {
+                  audioElement.play().catch(err => {
+                    console.warn('[PlayerStore] 恢复播放失败:', err);
+                  });
+                }
+              }
+            }
+          } else {
+            // 仅更新临时搜索结果，不影响播放列表
+            this._tempSearchResults = [...(this._tempSearchResults || []), ...combinedSongs];
+          }
+        } else {
+          // 没有新增歌曲，返回false
+          console.log('[PlayerStore] 没有新增歌曲，返回false');
+          this.isSearching = false;
+          return false;
         }
 
         // 更新搜索状态
         this.isSearching = false;
 
-        // 返回是否还有更多歌曲可加载
-        return this.mainApiHasMore || this.fallbackApiHasMore;
+        // 返回是否还有更多结果
+        const hasMore = this.mainApiHasMore || this.fallbackApiHasMore;
+        console.log(`[PlayerStore] loadMoreSongs: 完成加载，还有更多结果=${hasMore}`);
+        return hasMore;
       } catch (error) {
-        console.error(`[PlayerStore] 加载更多歌曲失败:`, error);
+        console.error(`[PlayerStore] 加载更多歌曲时出错:`, error);
         this.isSearching = false;
         return false;
       }
@@ -2609,7 +2791,7 @@ export const usePlayerStore = defineStore('player', {
      */
     async _searchSongsFromMainApi(keywords, limit = 30, offset = 0) {
       try {
-        // // console.log(`[PlayerStore] 从主API搜索歌曲: ${keywords}, 偏移: ${offset}, 限制: ${limit}`);
+        console.log(`[PlayerStore] 从主API搜索歌曲: ${keywords}, 偏移: ${offset}, 限制: ${limit}`);
         const response = await axios.get(`${MAIN_API_BASE}/search`, {
           params: {
             keywords,
@@ -2650,16 +2832,17 @@ export const usePlayerStore = defineStore('player', {
           });
 
           // 更新主API搜索状态
-          this.mainApiHasMore = response.data.result.hasMore !== false;
+          const hasMore = response.data.result.hasMore !== false;
+          this.mainApiHasMore = hasMore;
           this.mainApiOffset = offset + songs.length;
 
           // 添加到主API歌曲列表，用于去重
           this.mainApiSongs = this.mainApiSongs.concat(songs);
 
-          // // console.log(`[PlayerStore] 主API搜索结果: ${songs.length} 首歌曲`);
+          console.log(`[PlayerStore] 主API搜索结果: ${songs.length} 首歌曲，hasMore=${hasMore}，新的偏移量=${this.mainApiOffset}`);
           return songs;
         } else {
-          // // console.log(`[PlayerStore] 主API搜索无结果或格式不正确`);
+          console.log(`[PlayerStore] 主API搜索无结果或格式不正确`);
           this.mainApiHasMore = false;
           return [];
         }
@@ -2935,6 +3118,22 @@ export const usePlayerStore = defineStore('player', {
         url: url,
         lrcUrl: lrcUrl
       };
+    },
+
+    /**
+     * 重置所有搜索相关的状态
+     */
+    resetSearchState() {
+      console.log('[PlayerStore] 重置所有搜索相关状态');
+      this.lastSearchKeyword = null;
+      this.mainApiOffset = 0;
+      this.fallbackApiOffset = 0;
+      this.mainApiHasMore = true;
+      this.fallbackApiHasMore = true;
+      this.mainApiSongs = [];
+      this.fallbackApiSongs = [];
+      this.combinedSongIds = new Set();
+      this._tempSearchResults = [];
     },
   }
 });

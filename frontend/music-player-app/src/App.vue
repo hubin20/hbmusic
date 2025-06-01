@@ -245,7 +245,8 @@ const viewToPathPattern = {
   playlists: ['/playlists'],
   playlistDetail: ['/playlist/'],
   ranking: ['/ranking'],   // 新增排行榜页面
-  mv: ['/mv']             // 新增MV页面
+  mv: ['/mv'],            // 新增MV页面
+  favorites: ['/favorites'] // 收藏页面
 };
 
 // 路径到视图的映射
@@ -254,60 +255,111 @@ function getViewFromPath(fullPath) {
   const [basePath, queryString] = fullPath.split('?');
   const params = new URLSearchParams(queryString || '');
   const tab = params.get('tab');
+  const isRanking = params.get('isRanking') === 'true'; // 检查是否是排行榜详情
+  const isFromSearch = params.get('fromSearch') === 'true'; // 检查是否来自搜索
+  const isFromFavorites = params.get('fromFavorites') === 'true'; // 检查是否来自收藏
+  const isFromMV = params.get('fromMV') === 'true'; // 检查是否来自MV页面
+  const isFromRanking = params.get('fromRanking') === 'true'; // 检查是否来自排行榜
+  
+  // 获取更多搜索和收藏相关参数
+  const keyword = params.get('keyword'); // 搜索关键词
+  const searchType = params.get('searchType'); // 搜索类型
+  const favoriteTab = params.get('favoriteTab'); // 收藏标签页
+    
+  console.log(`[App.vue] getViewFromPath 分析路径: ${fullPath}, 参数:`, {
+    tab, isRanking, isFromSearch, isFromFavorites, isFromMV, isFromRanking,
+    keyword, searchType, favoriteTab // 添加更多参数到日志
+  });
     
   // 根据基本路径和tab参数确定视图类型
   if (basePath === '/' || basePath === '/playlist-display') return 'playlist';
   if (basePath.startsWith('/search')) return 'search';
+  if (basePath.startsWith('/favorites')) return 'favorites';
   
   // 处理歌单页面的不同标签
   if (basePath === '/playlists') {
-    // 检查localStorage中是否有临时存储的滚动位置
+    // 检查tab参数
     if (tab === 'ranking') {
-      // 尝试读取临时存储的排行榜滚动位置
-      // const rankingScroll = localStorage.getItem('temp_scroll_ranking');
-      // if (rankingScroll) {
-      //   // 更新scrollPositions中的排行榜滚动位置
-      //   scrollPositions.value.ranking = parseInt(rankingScroll, 10);
-      //   localStorage.removeItem('temp_scroll_ranking');
-      // }
       return 'ranking';
     }
     
     if (tab === 'mv') {
-      // 尝试读取临时存储的MV滚动位置
-      // const mvScroll = localStorage.getItem('temp_scroll_mv');
-      // if (mvScroll) {
-      //   // 更新scrollPositions中的MV滚动位置
-      //   scrollPositions.value.mv = parseInt(mvScroll, 10);
-      //   localStorage.removeItem('temp_scroll_mv');
-      // }
       return 'mv';
     }
     
     if (tab === 'mine') {
-      // 尝试读取临时存储的用户歌单滚动位置
-      // const mineScroll = localStorage.getItem('temp_scroll_mine');
-      // if (mineScroll) {
-      //   // 更新scrollPositions中的用户歌单滚动位置
-      //   scrollPositions.value.mine = parseInt(mineScroll, 10);
-      //   localStorage.removeItem('temp_scroll_mine');
-      // }
       return 'mine';
     }
     
     // 没有指定tab或tab为all时，返回playlists
-    // 尝试读取临时存储的歌单滚动位置
-    // const playlistsScroll = localStorage.getItem('temp_scroll_all');
-    // if (playlistsScroll) {
-    //   // 更新scrollPositions中的歌单滚动位置
-    //   scrollPositions.value.playlists = parseInt(playlistsScroll, 10);
-    //   localStorage.removeItem('temp_scroll_all');
-    // }
     return 'playlists';
   }
   
-  if (basePath.startsWith('/playlist/')) return 'playlistDetail';
-  if (basePath.startsWith('/mv/')) return 'mv'; // 添加对MV详情页的处理
+  // 处理歌单详情页
+  if (basePath.startsWith('/playlist/')) {
+    // 检查是否来自搜索
+    if (isFromSearch) {
+      console.log('[App.vue] 歌单详情页来自搜索，返回search，搜索关键词:', keyword, '搜索类型:', searchType);
+      return 'search';
+    }
+    
+    // 检查是否来自收藏页
+    if (isFromFavorites) {
+      console.log('[App.vue] 歌单详情页来自收藏，返回favorites，收藏标签页:', favoriteTab);
+      return 'favorites';
+    }
+    
+    // 检查是否来自排行榜
+    if (isFromRanking || isRanking) {
+      console.log('[App.vue] 歌单详情页来自排行榜，返回ranking');
+      return 'ranking';
+    }
+    
+    // 检查是否来自MV页面
+    if (isFromMV) {
+      console.log('[App.vue] 歌单详情页来自MV页面，返回mv');
+      return 'mv';
+    }
+    
+    // 默认返回歌单详情视图
+    return 'playlistDetail';
+  }
+  
+  // 处理MV详情页
+  if (basePath.startsWith('/mv/')) {
+    // 检查是否来自搜索
+    if (isFromSearch) {
+      console.log('[App.vue] MV详情页来自搜索，返回search，搜索关键词:', keyword, '搜索类型:', searchType);
+      return 'search';
+    }
+    
+    // 检查是否来自收藏页
+    if (isFromFavorites) {
+      console.log('[App.vue] MV详情页来自收藏，返回favorites，收藏标签页:', favoriteTab);
+      return 'favorites';
+    }
+    
+    // 默认返回MV视图
+    return 'mv';
+  }
+  
+  // 处理专辑详情页
+  if (basePath.startsWith('/album/')) {
+    // 检查是否是来自搜索
+    if (isFromSearch) {
+      console.log('[App.vue] 专辑详情页来自搜索，返回search，搜索关键词:', keyword, '搜索类型:', searchType);
+      return 'search';
+    }
+    
+    // 检查是否来自收藏页
+    if (isFromFavorites) {
+      console.log('[App.vue] 专辑详情页来自收藏，返回favorites，收藏标签页:', favoriteTab);
+      return 'favorites';
+    }
+    
+    // 默认返回播放列表视图
+    return 'playlist';
+  }
   
   return 'unknown';
 }
@@ -432,6 +484,8 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
   const oldView = getViewFromPath(oldFullPath);
   const newView = getViewFromPath(newFullPath);
   
+  console.log(`[App.vue] 路由变化: ${oldFullPath} (${oldView}) -> ${newFullPath} (${newView})`);
+  
   // 保存导航历史
   window._navigationHistory.push({
     from: oldFullPath,
@@ -446,6 +500,67 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
     window._navigationHistory = window._navigationHistory.slice(-20);
   }
   
+  // 解析查询参数，判断导航来源
+  const [oldBasePath, oldQueryString] = oldFullPath.split('?');
+  const oldParams = new URLSearchParams(oldQueryString || '');
+  const oldFromSearch = oldParams.get('fromSearch') === 'true';
+  const oldFromFavorites = oldParams.get('fromFavorites') === 'true';
+  const oldFromRanking = oldParams.get('fromRanking') === 'true';
+  const oldFromMV = oldParams.get('fromMV') === 'true';
+  
+  const [newBasePath, newQueryString] = newFullPath.split('?');
+  const newParams = new URLSearchParams(newQueryString || '');
+  const newFromSearch = newParams.get('fromSearch') === 'true';
+  const newFromFavorites = newParams.get('fromFavorites') === 'true';
+  const newFromRanking = newParams.get('fromRanking') === 'true';
+  const newFromMV = newParams.get('fromMV') === 'true';
+  
+  // 判断是否有特殊返回逻辑
+  const isDetailToSource = 
+    // 从歌单详情页返回
+    ((oldBasePath.startsWith('/playlist/') || oldBasePath.startsWith('/album/') || oldBasePath.startsWith('/mv/')) && 
+    // 返回到原来的页面类型
+    ((oldFromSearch && newBasePath === '/search') || 
+     (oldFromFavorites && newBasePath === '/favorites') ||
+     (oldFromRanking && newBasePath.startsWith('/playlists') && newParams.get('tab') === 'ranking') ||
+     (oldFromMV && newBasePath.startsWith('/playlists') && newParams.get('tab') === 'mv')));
+  
+  if (isDetailToSource) {
+    console.log('[App.vue] 检测到从详情页返回到源页面');
+    // 应当恢复之前保存的滚动位置
+    const sourceScrollKey = oldFromSearch ? 'scroll_pos_search' :
+                           oldFromFavorites ? 'scroll_pos_favorites' :
+                           oldFromRanking ? 'scroll_pos_ranking' :
+                           oldFromMV ? 'scroll_pos_mv' : null;
+    
+    if (sourceScrollKey) {
+      const savedScrollPos = localStorage.getItem(sourceScrollKey) ||
+                            localStorage.getItem(`temp_scroll_${oldView}`);
+      
+      if (savedScrollPos) {
+        console.log(`[App.vue] 准备恢复${oldView}页面的滚动位置: ${savedScrollPos}`);
+        // 更新滚动位置缓存
+        scrollPositions.value[newView] = parseInt(savedScrollPos, 10);
+        // 保存到本地存储以便后续使用
+        saveToLocalStorage();
+      }
+    }
+  }
+  
+  // 检测从搜索页面返回播放页面的情况
+  const isFromSearchToPlayerView = oldBasePath.includes('/search') && newBasePath === '/';
+  
+  if (isFromSearchToPlayerView) {
+    console.log('[App.vue] 从搜索页面返回播放页面，设置防止自动播放标记');
+    // 设置标记，防止自动播放搜索结果中的歌曲
+    localStorage.setItem('preventAutoPlayFromSearch', 'true');
+    
+    // 延迟清除标记
+    setTimeout(() => {
+      localStorage.removeItem('preventAutoPlayFromSearch');
+    }, 3000);
+  }
+  
   const isFromPlaylistToPlayerView = 
     (oldView === 'playlistDetail' || oldView === 'playlists' || oldView === 'ranking' || oldView === 'mv') && 
     (newView === 'playlist');
@@ -454,6 +569,9 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
     console.log('[App.vue] 从歌单页面返回播放页面，保持播放状态');
     // 记录特殊标志，表示不要重新加载数据
     window._preventDataReload = true;
+    
+    // 清除搜索结果缓存，确保不会在播放页面显示搜索结果
+    playerStore.lastSearchKeyword = null;
     
     // 使用replaceState替代pushState，防止页面重新加载
     const currentPath = window.location.pathname;
@@ -476,14 +594,14 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
   
   // 保存离开页面的滚动位置
   if (oldView !== 'unknown') {
-    // 检查是否有PlaylistsView.vue保存的临时滚动位置
+    // 检查是否有保存的临时滚动位置
     const tempScrollKey = `temp_scroll_${oldView}`;
     const scrollPosKey = `scroll_pos_${oldView}`;
     const tempScrollPos = localStorage.getItem(tempScrollKey) || localStorage.getItem(scrollPosKey);
     
     if (tempScrollPos) {
       const scrollTop = parseInt(tempScrollPos, 10);
-      // console.log(`[App.vue] 获取到临时保存的滚动位置 ${oldView}: ${scrollTop}`);
+      console.log(`[App.vue] 获取到临时保存的滚动位置 ${oldView}: ${scrollTop}`);
       
       // 更新scrollPositions中的值
       scrollPositions.value[oldView] = scrollTop;
@@ -588,7 +706,7 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
         else if ((newView === 'ranking' || newView === 'mv' || newView === 'playlists' || newView === 'mine') && 
                 (oldView === 'ranking' || oldView === 'mv' || oldView === 'playlists' || oldView === 'mine')) {
           
-          // console.log(`[App.vue] 歌单页面标签切换: ${oldView} -> ${newView}`);
+          console.log(`[App.vue] 歌单页面标签切换: ${oldView} -> ${newView}`);
           
           // 检查是否有保存的滚动位置
           const scrollPosKey = `scroll_pos_${newView}`;
@@ -597,7 +715,7 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
           
           if (savedScrollPos) {
             const scrollPos = parseInt(savedScrollPos, 10);
-            // console.log(`[App.vue] 恢复${newView}标签滚动位置: ${scrollPos}`);
+            console.log(`[App.vue] 恢复${newView}标签滚动位置: ${scrollPos}`);
             
             // 更新scrollPositions中的值
             scrollPositions.value[newView] = scrollPos;
@@ -618,41 +736,140 @@ watch([() => route.fullPath], ([newFullPath], [oldFullPath]) => {
             restoreScrollPosition(newView, 15); // 增加尝试次数
           }, 300);
         }
-        // 正常情况，恢复保存的滚动位置
+        // 对于其他所有视图变化，尝试恢复各自的滚动位置
         else {
-          restoreScrollPosition(newView);
+          // 恢复滚动位置
+          setTimeout(() => {
+            restoreScrollPosition(newView, 10); // 增加尝试次数，确保滚动恢复成功
+          }, 200);
         }
-    }
-    }, 200); // 增加延迟时间
+      }
+    }, 50);
   });
-}, { immediate: false });
+});
 
 // 添加新的监听器，专门处理MV页面返回
 watch(() => route.fullPath, (newPath, oldPath) => {
   // 检查是否从MV页面返回到播放页面
-  if (oldPath && oldPath.includes('/mv/') && (newPath === '/' || newPath === '/playlist-display')) {
+  if (oldPath && oldPath.includes('/mv/') && (newPath === '/' || newPath === '/playlist-display' || newPath.includes('/playlist'))) {
     console.log('[App.vue] 从MV页面返回到播放页面，确保播放状态');
     
     // 特殊处理标记
     window._fromMVToPlaylist = true;
     window._preventDataReload = true;
     
+    // 清除所有MV相关状态标记
+    localStorage.removeItem('musicPausedForMV');
+    localStorage.removeItem('isFromMV');
+    sessionStorage.removeItem('mv_return_playstate');
+    sessionStorage.removeItem('mv_return_timestamp');
+    
     // 确保页面内容已加载并恢复播放状态
     setTimeout(() => {
       if (playerStore.currentSong) {
-        // 确保播放状态正常
-        if (playerStore.isPlaying) {
+        // 检查之前的播放状态
+        const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
+        console.log('[App.vue] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
+        
+        if (musicWasPlaying) {
+          // 如果之前是播放状态，确保恢复播放
+          if (!playerStore.isPlaying) {
+            console.log('[App.vue] 设置播放状态为true');
+            playerStore.isPlaying = true;
+          }
+          
+          // 确保音频播放
           const audio = document.querySelector('audio');
           if (audio && audio.paused) {
             console.log('[App.vue] 尝试恢复音频播放');
-            audio.play().catch(err => {
-              console.warn('[App.vue] 自动恢复播放失败:', err);
+            try {
+              const playPromise = audio.play();
+              if (playPromise !== undefined) {
+                playPromise.catch(err => {
+                  console.warn('[App.vue] 自动恢复播放失败:', err);
+                  window._needManualPlayResume = true;
+                  
+                  // 再次尝试播放
+                  setTimeout(() => {
+                    console.log('[App.vue] 再次尝试恢复播放');
+                    audio.play().catch(() => {
+                      console.warn('[App.vue] 二次尝试播放失败，需要用户交互');
+                    });
+                  }, 1000);
+                });
+              }
+            } catch (err) {
+              console.warn('[App.vue] 播放尝试出错:', err);
+            }
+          }
+        } else {
+          // 如果之前是暂停状态，确保保持暂停
+          if (playerStore.isPlaying) {
+            console.log('[App.vue] 设置播放状态为false');
+            playerStore.isPlaying = false;
+          }
+          
+          // 确保音频暂停
+          const audio = document.querySelector('audio');
+          if (audio && !audio.paused) {
+            console.log('[App.vue] 确保音频保持暂停');
+            audio.pause();
+          }
+        }
+        
+        // 清除记录
+        localStorage.removeItem('musicWasPlaying');
+      }
+      
+      // 300ms后再次检查，以防播放状态未正确恢复
+      setTimeout(() => {
+        if (playerStore.currentSong && playerStore.isPlaying) {
+          const audio = document.querySelector('audio');
+          if (audio && audio.paused) {
+            console.log('[App.vue] 二次尝试恢复音频播放');
+            audio.play().catch(() => {
               window._needManualPlayResume = true;
             });
           }
         }
-      }
+      }, 500);
     }, 300); // 等待播放器组件挂载完成
+  }
+  // 添加对从歌词页面返回的处理
+  else if (oldPath && oldPath.includes('/lyrics') && (newPath === '/' || newPath.includes('/playlist'))) {
+    console.log('[App.vue] 从歌词页面返回到歌单页面，确保播放状态保持不变');
+    
+    // 清除可能存在的MV相关状态标记，防止误触发MV处理逻辑
+    localStorage.removeItem('musicPausedForMV');
+    localStorage.removeItem('musicWasPlaying');
+    localStorage.removeItem('isFromMV');
+    sessionStorage.removeItem('mv_return_playstate');
+    sessionStorage.removeItem('mv_return_timestamp');
+    
+    // 重置MVView相关的标记，确保不影响当前播放状态
+    if (window._fromMVToPlaylist) window._fromMVToPlaylist = false;
+    
+    // 设置一个短暂的标记，表示刚从歌词页面返回
+    // 这个标记会在MVView组件的watch函数中被检查和清除
+    localStorage.setItem('fromLyricsPage', 'true');
+    
+    // 延迟清除标记，确保MVView组件有足够时间检测到
+    setTimeout(() => {
+      localStorage.removeItem('fromLyricsPage');
+    }, 3000);
+    
+    // 确保音乐继续播放
+    setTimeout(() => {
+      if (playerStore.currentSong && playerStore.isPlaying) {
+        const audio = document.querySelector('audio');
+        if (audio && audio.paused) {
+          console.log('[App.vue] 从歌词页面返回，确保音乐继续播放');
+          audio.play().catch(err => {
+            console.warn('[App.vue] 恢复播放失败:', err);
+          });
+        }
+      }
+    }, 500);
   }
   
   // 特殊处理来自歌单或其他页面返回导致的播放中断
@@ -671,6 +888,7 @@ watch(() => route.fullPath, (newPath, oldPath) => {
       
       // 清除特殊标记
       window._preventDataReload = false;
+      window._fromMVToPlaylist = false;
     }, 500);
   }
 }, { immediate: false });

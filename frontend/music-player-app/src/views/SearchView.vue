@@ -27,23 +27,23 @@
     
     <div v-else class="song-list-container">
       <!-- 单曲搜索结果 -->
-      <div v-if="currentSearchType === 'song'">
+      <div v-if="currentSearchType === 'song'" class="song-list-container">
         <div class="table-header-row">
-          <div class="header-cell song-index-cell"></div>
+          <div class="header-cell song-index-cell">#</div>
           <div class="header-cell song-title-cell">歌曲</div>
           <div class="header-cell song-artist-cell">歌手</div>
-          <div class="header-cell song-actions-cell">操作</div>
+          <div class="header-cell song-album-cell">专辑</div>
+          <div class="header-cell song-actions-cell"></div>
         </div>
-        
         <div class="song-list-body">
-          <SongItem 
-            v-for="(song, index) in searchResults" 
-            :key="song.id" 
-            :song="song" 
+          <SongItem
+            v-for="(song, index) in searchResults"
+            :key="song.id"
+            :song="song"
             :index="index"
-            :is-playing="playerStore.currentSongIndex === index && playerStore.isPlaying"
-            :is-current="playerStore.currentSongIndex === index"
-            @play-song="playSong"
+            :is-playing="playerStore.isPlaying"
+            :is-current="playerStore.currentSong && playerStore.currentSong.id === song.id"
+            @play-song="handleSongPlay"
           />
         </div>
       </div>
@@ -178,6 +178,9 @@ const searchTypes = [
 // API基础URL
 const API_BASE_URL = import.meta.env.VITE_MAIN_API_BASE || 'https://api.931125.xyz';
 
+// 添加一个ref来记录上次搜索的关键词
+const lastSearchedKeyword = ref('');
+
 /**
  * 丝滑恢复滚动位置
  * @param {Element} container - 滚动容器
@@ -293,16 +296,86 @@ const performSearch = async (query, isLoadMore = false) => {
         
         if (isLoadMore) {
           // 加载更多使用loadMoreSongs方法
-          const results = await playerStore.loadMoreSongs(query, limit.value);
+          console.log(`[SearchView] 加载更多搜索结果，关键词: ${query}, 偏移量: ${offset.value}`);
+          
+          // 记录加载前的搜索结果数量
+          const beforeCount = allSearchResults.value.length;
+          
+          // 尝试加载更多
+          let results = await playerStore.loadMoreSongs(query, limit.value, false);
+          
+          // 如果加载失败或没有新增歌曲，尝试增加偏移量再次加载
+          if (results === false) {
+            console.log(`[SearchView] 加载更多失败或无新增歌曲，尝试增加偏移量再次加载`);
+            
+            // 增加主API和备用API的偏移量
+            playerStore.mainApiOffset += 30;
+            playerStore.fallbackApiOffset += 30;
+            
+            // 再次尝试加载
+            results = await playerStore.loadMoreSongs(query, limit.value, false);
+          }
+          
           // 更新是否有更多内容
           hasMore.value = results !== false;
-          // 获取更新后的播放列表
-          allSearchResults.value = playerStore.playlist || [];
+          
+          // 获取临时搜索结果，而不是播放列表
+          allSearchResults.value = playerStore._tempSearchResults || [];
+          
+          // 检查是否真的加载了新歌曲
+          const afterCount = allSearchResults.value.length;
+          if (afterCount <= beforeCount) {
+            console.log(`[SearchView] 警告: 加载更多后歌曲数量没有增加，可能存在去重问题`);
+            
+            // 如果主API还有更多结果，强制再次尝试加载
+            if (playerStore.mainApiHasMore) {
+              console.log(`[SearchView] 主API还有更多结果，强制增加偏移量再次尝试`);
+              playerStore.mainApiOffset += 30; // 再次增加偏移量
+              
+              // 再次尝试加载
+              results = await playerStore.loadMoreSongs(query, limit.value, false);
+              hasMore.value = results !== false;
+              allSearchResults.value = playerStore._tempSearchResults || [];
+            } else {
+              // 如果主API没有更多结果，设置hasMore为false
+              hasMore.value = false;
+            }
+          }
+          
+          console.log(`[SearchView] 加载更多后状态 - 主API偏移: ${playerStore.mainApiOffset}, 备用API偏移: ${playerStore.fallbackApiOffset}, 主API还有更多: ${playerStore.mainApiHasMore}, 备用API还有更多: ${playerStore.fallbackApiHasMore}`);
+          console.log(`[SearchView] 加载更多后歌曲数量: ${allSearchResults.value.length}, 是否有更多: ${hasMore.value}`);
         } else {
           // 首次搜索使用searchSongs方法，强制不使用缓存
-          await playerStore.searchSongs(query, true, false, true); // 最后一个参数设置为true，强制不使用缓存
-          // 获取播放列表
-          allSearchResults.value = playerStore.playlist || [];
+          // 添加标志位表示这是搜索结果，不是用户主动点击播放
+          const currentSong = playerStore.currentSong;
+          const currentSongIndex = playerStore.currentSongIndex;
+          const isPlaying = playerStore.isPlaying;
+          
+          // 搜索歌曲但不替换当前播放列表，强制跳过缓存
+          console.log(`[SearchView] 执行搜索，关键词: ${query}, 强制跳过缓存`);
+          await playerStore.searchSongs(query, true, false, true, false); // resetPagination=true, useCache=false, skipCache=true, replacePlaylist=false
+          
+          // 获取临时搜索结果，而不是播放列表
+          allSearchResults.value = playerStore._tempSearchResults || [];
+          
+          // 如果之前有正在播放的歌曲，恢复它
+          if (currentSong) {
+            // 恢复之前的播放状态
+            playerStore.currentSong = currentSong;
+            playerStore.currentSongIndex = currentSongIndex;
+            playerStore.isPlaying = isPlaying;
+            
+            // 如果当前正在播放，确保音频元素的状态与播放状态一致
+            if (isPlaying) {
+              const audioElement = playerStore._getAudioElement();
+              if (audioElement && audioElement.paused) {
+                audioElement.play().catch(err => {
+                  console.warn('[SearchView] 恢复播放失败:', err);
+                });
+              }
+            }
+          }
+          
           // 更新是否有更多内容
           hasMore.value = playerStore.mainApiHasMore || playerStore.fallbackApiHasMore;
         }
@@ -474,6 +547,13 @@ const searchMVs = async (query, isLoadMore = false) => {
 const loadMore = () => {
   if (isLoading.value || !hasMore.value) return;
   
+  console.log(`[SearchView] 加载更多，当前偏移量: ${offset.value}，关键词: ${searchQuery.value}`);
+  console.log(`[SearchView] 加载更多前状态 - 主API偏移: ${playerStore.mainApiOffset}, 备用API偏移: ${playerStore.fallbackApiOffset}, 主API还有更多: ${playerStore.mainApiHasMore}, 备用API还有更多: ${playerStore.fallbackApiHasMore}`);
+  
+  // 不再清除缓存，这会导致每次加载更多时都重置状态
+  // const lastUpdateKey = `last_update_search_${searchQuery.value}_${currentSearchType.value}`;
+  // localStorage.removeItem(lastUpdateKey);
+  
   offset.value += limit.value;
   performSearch(searchQuery.value, true);
 };
@@ -481,7 +561,10 @@ const loadMore = () => {
 // 监听路由变化，更新搜索查询
 watch(() => route.query, (newQuery, oldQuery) => {
   if (newQuery && newQuery.q) {
-    const isNewSearch = newQuery.q !== (oldQuery && oldQuery.q) || newQuery.type !== (oldQuery && oldQuery.type);
+    // 检查是否是相同关键词
+    const isSameKeyword = newQuery.q === oldQuery?.q;
+    const isSameType = newQuery.type === oldQuery?.type;
+    const isNewSearch = !isSameKeyword || !isSameType;
     
     // 记录新的搜索关键词
     searchQuery.value = newQuery.q;
@@ -493,39 +576,104 @@ watch(() => route.query, (newQuery, oldQuery) => {
       currentSearchType.value = 'song'; // 默认为单曲搜索
     }
     
-    // 执行搜索
-    performSearch(newQuery.q);
-    
-    // 如果是新的搜索（关键词变化），则强制滚动到顶部
+    // 如果是新的搜索（关键词或类型变化），重置分页状态
     if (isNewSearch) {
-      // console.log('[搜索页面] 新的搜索关键词，重置滚动位置');
+      console.log(`[SearchView] 新的搜索: 关键词=${newQuery.q}, 类型=${currentSearchType.value}`);
+      offset.value = 0;
+      hasMore.value = true;
+      
+      // 执行搜索，强制跳过缓存
+      performSearch(newQuery.q);
+      
+      // 滚动到顶部
       nextTick(() => {
         setTimeout(() => {
           const scrollElement = document.querySelector('.content-area');
           if (scrollElement) {
-            // console.log('[搜索页面] 滚动到顶部');
             // 使用丝滑滚动到顶部
             smoothRestoreScroll(scrollElement, 0);
           }
         }, 100);
       });
+    } else {
+      // 如果是相同关键词和类型，不重新搜索，只确保搜索状态正确
+      console.log(`[SearchView] 相同的搜索: 关键词=${newQuery.q}, 类型=${currentSearchType.value}, 使用现有结果`);
+      
+      // 确保playerStore的lastSearchKeyword与当前搜索关键词一致
+      playerStore.lastSearchKeyword = searchQuery.value;
+      
+      // 如果playerStore的搜索状态被重置，重新初始化
+      if (playerStore.mainApiOffset === 0 && playerStore.fallbackApiOffset === 0 && 
+          allSearchResults.value.length > 0) {
+        console.log(`[SearchView] 检测到playerStore搜索状态已重置，重新初始化`);
+        
+        // 将当前搜索结果分类为主API和备用API结果
+        const mainApiResults = allSearchResults.value.filter(s => !s.isFromKw);
+        const fallbackApiResults = allSearchResults.value.filter(s => s.isFromKw);
+        
+        // 更新playerStore的搜索状态
+        playerStore.mainApiSongs = [...mainApiResults];
+        playerStore.fallbackApiSongs = [...fallbackApiResults];
+        playerStore.mainApiOffset = mainApiResults.length;
+        playerStore.fallbackApiOffset = fallbackApiResults.length;
+        playerStore.mainApiHasMore = true; // 假设还有更多结果
+        playerStore.fallbackApiHasMore = true;
+        playerStore._tempSearchResults = [...allSearchResults.value];
+        
+        // 更新combinedSongIds用于去重
+        playerStore.combinedSongIds = new Set(
+          allSearchResults.value.map(s => s.isFromKw ? `kw_${s.id}` : `main_${s.id}`)
+        );
+      }
     }
   }
 }, { immediate: true, deep: true });
 
 // 播放选中的歌曲
-const playSong = (songData) => {
+const handleSongPlay = (songData) => {
+  // 检查是否应该自动播放
+  // 如果从搜索页面返回播放页面，则不自动播放
+  const preventAutoPlay = localStorage.getItem('preventAutoPlayFromSearch') === 'true';
+  
+  // 只有在明确由用户点击触发时才自动播放，通过检查songData.autoPlay
+  // songData.autoPlay默认为true，表示用户点击了歌曲
+  const autoPlay = songData.autoPlay !== false && !preventAutoPlay;
+  
+  if (preventAutoPlay) {
+    console.log('[SearchView] 检测到从搜索页面返回，不自动播放歌曲');
+  }
+  
   // 创建完整的播放列表（包括当前歌曲和之后的所有歌曲）
   const playlistStartingFromSelected = [...allSearchResults.value];
   
   // 确保设置lastSearchKeyword为当前搜索关键词
   playerStore.lastSearchKeyword = searchQuery.value;
   
-  // 更新播放器的播放列表
-  playerStore.setPlaylist(playlistStartingFromSelected, true);
-  
-  // 播放选中的歌曲
-  playerStore.playSong(songData.song, songData.index);
+  // 仅当用户点击了搜索结果中的歌曲时才替换播放列表
+  if (songData.autoPlay !== false) {
+    // 更新播放器的播放列表
+    console.log('[SearchView] 用户点击了搜索结果中的歌曲，替换播放列表');
+    
+    // 确保_tempSearchResults与当前搜索结果同步
+    playerStore._tempSearchResults = [...allSearchResults.value];
+    
+    playerStore.setPlaylist(playlistStartingFromSelected, true);
+    
+    // 播放选中的歌曲，但只有在autoPlay为true时才实际播放
+    if (autoPlay) {
+      console.log('[SearchView] 播放歌曲:', songData.song.name);
+      playerStore.playSong(songData.song, songData.index);
+    } else {
+      console.log('[SearchView] 设置当前歌曲但不播放:', songData.song.name);
+      // 仅设置当前歌曲，但不播放
+      playerStore.currentSong = songData.song;
+      playerStore.currentSongIndex = songData.index;
+    }
+  } else {
+    // 用户没有点击搜索结果中的歌曲，保持原来的播放列表
+    console.log('[SearchView] 用户没有点击搜索结果中的歌曲，保持原来的播放列表');
+    // 不替换播放列表，不暂停当前播放的歌曲
+  }
 };
 
 // 增加滚动处理函数
@@ -563,17 +711,63 @@ onActivated(() => {
     const now = Date.now();
     const cacheExpired = !lastUpdate || (now - parseInt(lastUpdate, 10)) > 30 * 60 * 1000; // 30分钟缓存
     
-    // 只有在没有数据或缓存过期的情况下才重新加载
-    if (!hasData || cacheExpired) {
+    // 检查是否是同一个搜索关键词
+    const isSameSearch = searchQuery.value === lastSearchedKeyword.value;
+    
+    // 只有在没有数据或缓存过期，且不是同一个搜索关键词时才重新加载
+    if ((!hasData || cacheExpired) && !isSameSearch) {
       console.log(`[SearchView][onActivated] 缓存不存在或已过期，重新加载数据`);
       if (searchQuery.value) {
+        // 重置分页状态
+        offset.value = 0;
+        hasMore.value = true;
+        
+        // 保存当前搜索关键词
+        lastSearchedKeyword.value = searchQuery.value;
+        
+        // 重新执行搜索，强制跳过缓存
         performSearch(searchQuery.value);
       }
     } else {
-      console.log(`[SearchView][onActivated] 使用缓存数据，上次更新时间: ${new Date(parseInt(lastUpdate, 10)).toLocaleString()}`);
+      console.log(`[SearchView][onActivated] 使用缓存数据，上次更新时间: ${lastUpdate ? new Date(parseInt(lastUpdate, 10)).toLocaleString() : '无'}`);
+      
+      // 即使使用缓存数据，也需要确保playerStore中的搜索状态与当前搜索结果一致
+      // 这是为了解决从歌单详情页返回搜索页面时，playerStore的搜索状态可能已被重置的问题
+      if (searchQuery.value && currentSearchType.value === 'song') {
+        // 确保playerStore的lastSearchKeyword与当前搜索关键词一致
+        playerStore.lastSearchKeyword = searchQuery.value;
+        
+        // 如果playerStore的搜索状态与当前搜索结果不一致，重新初始化搜索状态
+        if (playerStore.mainApiOffset === 0 && playerStore.fallbackApiOffset === 0 && 
+            allSearchResults.value.length > 0) {
+          console.log(`[SearchView][onActivated] 检测到playerStore搜索状态已重置，重新初始化搜索状态`);
+          
+          // 将当前搜索结果分类为主API和备用API结果
+          const mainApiResults = allSearchResults.value.filter(s => !s.isFromKw);
+          const fallbackApiResults = allSearchResults.value.filter(s => s.isFromKw);
+          
+          // 更新playerStore的搜索状态
+          playerStore.mainApiSongs = [...mainApiResults];
+          playerStore.fallbackApiSongs = [...fallbackApiResults];
+          playerStore.mainApiOffset = mainApiResults.length;
+          playerStore.fallbackApiOffset = fallbackApiResults.length;
+          playerStore.mainApiHasMore = true; // 假设还有更多结果
+          playerStore.fallbackApiHasMore = true;
+          playerStore._tempSearchResults = [...allSearchResults.value];
+          
+          // 更新combinedSongIds用于去重
+          playerStore.combinedSongIds = new Set(
+            allSearchResults.value.map(s => s.isFromKw ? `kw_${s.id}` : `main_${s.id}`)
+          );
+        }
+      }
+      
       // 不重新加载，但确保设置观察器
-    setupIntersectionObserver();
+      setupIntersectionObserver();
     }
+    
+    // 保存当前搜索关键词
+    lastSearchedKeyword.value = searchQuery.value;
     
     // 尝试恢复滚动位置（仅当不是新搜索时）
     if (allSearchResults.value.length > 0) {
@@ -645,7 +839,14 @@ onMounted(() => {
  * @param {Object} album - 专辑对象
  */
 const navigateToAlbum = (album) => {
-  router.push(`/album/${album.id}`);
+  router.push({
+    path: `/album/${album.id}`,
+    query: { 
+      fromSearch: 'true',
+      keyword: searchQuery.value, // 保存搜索关键词以便在返回时恢复
+      searchType: currentSearchType.value // 保存当前搜索类型
+    }
+  });
 };
 
 /**
@@ -653,7 +854,14 @@ const navigateToAlbum = (album) => {
  * @param {Object} playlist - 歌单对象
  */
 const navigateToPlaylist = (playlist) => {
-  router.push(`/playlist/${playlist.id}`);
+  router.push({
+    path: `/playlist/${playlist.id}`,
+    query: { 
+      fromSearch: 'true',
+      keyword: searchQuery.value, // 保存搜索关键词以便在返回时恢复
+      searchType: currentSearchType.value // 保存当前搜索类型
+    }
+  });
 };
 
 /**
@@ -662,13 +870,27 @@ const navigateToPlaylist = (playlist) => {
  */
 const handleMVClick = (mv) => {
   console.log('点击MV项:', mv.name, mv.id);
+  // 确保正确记录当前搜索状态
+  const currentKeyword = searchQuery.value;
+  const currentType = currentSearchType.value;
+  
+  console.log('[SearchView] 导航到MV详情页，参数:', {
+    id: mv.id,
+    source: mv.source === 'kw' ? 'kw' : undefined,
+    fromSearch: true,
+    keyword: currentKeyword,
+    searchType: currentType
+  });
+  
   // 跳转到MV详情页面，传递MV ID和搜索关键词
   router.push({
     name: 'mv-detail',
     params: { id: mv.id },
     query: { 
       source: mv.source === 'kw' ? 'kw' : undefined,
-      keyword: searchQuery.value // 添加搜索关键词
+      fromSearch: 'true', // 添加来源标记
+      keyword: currentKeyword, // 保存搜索关键词以便在返回时恢复
+      searchType: currentType // 保存当前搜索类型
     }
   });
 };
@@ -676,31 +898,24 @@ const handleMVClick = (mv) => {
 /**
  * 格式化播放次数
  * @param {number} count - 播放次数
- * @returns {string} 格式化后的播放次数
+ * @returns {string} - 格式化后的播放次数
  */
 const formatPlayCount = (count) => {
   if (!count) return '0';
-  
-  if (count >= 100000000) {
-    return (count / 100000000).toFixed(1) + '亿';
-  } else if (count >= 10000) {
-    return (count / 10000).toFixed(1) + '万';
-  } else {
-    return count.toString();
-  }
+  if (count < 10000) return count.toString();
+  return (count / 10000).toFixed(1) + '万';
 };
 
 /**
- * 格式化时长
- * @param {number} duration - 时长（秒）
- * @returns {string} 格式化后的时长
+ * 格式化持续时间
+ * @param {number} ms - 毫秒时长
+ * @returns {string} - 格式化后的时长
  */
-const formatDuration = (duration) => {
-  if (!duration) return '0:00';
-  
-  const minutes = Math.floor(duration / 60);
-  const seconds = Math.floor(duration % 60);
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+const formatDuration = (ms) => {
+  if (!ms) return '0:00';
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
 };
 </script>
 
@@ -782,6 +997,7 @@ const formatDuration = (duration) => {
 .song-index-cell { width: 40px; text-align: center; flex-shrink: 0; }
 .song-title-cell { flex: 5; }
 .song-artist-cell { flex: 3; }
+.song-album-cell { flex: 3; }
 .song-actions-cell { width: 50px; }
 
 .song-list-body {

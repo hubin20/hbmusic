@@ -55,7 +55,7 @@
 <script setup>
 import { usePlayerStore } from '../stores/player';
 import { useRoute } from 'vue-router'; // 导入 useRoute
-import { ref, watch, onBeforeUpdate, nextTick, onMounted } from 'vue';
+import { ref, watch, onBeforeUpdate, nextTick, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router'; // 导入 useRouter
 
 const playerStore = usePlayerStore();
@@ -63,6 +63,27 @@ const route = useRoute(); // 使用 useRoute 获取当前路由信息
 const router = useRouter(); // 使用 useRouter
 const lyricsContainer = ref(null);
 const lyricLineRefs = ref([]);
+
+// 在onMounted外部定义这些函数，这样onUnmounted可以引用相同的实例
+let routeChangeHandler = null;
+
+/**
+ * 清除MV相关的本地存储状态
+ */
+const clearMVRelatedStorageState = () => {
+  console.log('[LyricsView] 清除MV相关状态标记');
+  localStorage.removeItem('musicPausedForMV');
+  localStorage.removeItem('musicWasPlaying');
+  localStorage.removeItem('isFromMV');
+  sessionStorage.removeItem('mv_return_playstate');
+  sessionStorage.removeItem('mv_return_timestamp');
+  
+  // 保证播放状态不受影响
+  if (window._fromMVToPlaylist) window._fromMVToPlaylist = false;
+  
+  // 设置标记，表示从歌词页面返回
+  localStorage.setItem('fromLyricsPage', 'true');
+};
 
 // 彩色文字颜色数组
 const colorPalette = [
@@ -275,7 +296,7 @@ watch(() => route.path, (newPath) => {
   }
 });
 
-// 在组件挂载时保存前一个路由
+// 添加路由离开处理
 onMounted(() => {
   // 获取前一个路由路径并保存到localStorage
   const fromRoute = router.currentRoute.value.from;
@@ -304,6 +325,30 @@ onMounted(() => {
   // 确保在组件挂载时立即获取歌词
   if (playerStore.currentSong && playerStore.currentSong.id) {
     playerStore.fetchLyrics(playerStore.currentSong.id);
+  }
+  
+  // 使用window事件监听器处理路由离开
+  routeChangeHandler = () => {
+    // 只在页面卸载并且即将离开歌词页面时清除状态
+    if (location.pathname !== '/lyrics' && route.path === '/lyrics') {
+      clearMVRelatedStorageState();
+    }
+  };
+  
+  // 添加事件监听器，在页面导航前触发
+  window.addEventListener('beforeunload', routeChangeHandler);
+  window.addEventListener('popstate', routeChangeHandler);
+});
+
+// 在组件卸载时清理
+onUnmounted(() => {
+  // 清除MV相关状态标记
+  clearMVRelatedStorageState();
+  
+  // 移除事件监听器
+  if (routeChangeHandler) {
+    window.removeEventListener('beforeunload', routeChangeHandler);
+    window.removeEventListener('popstate', routeChangeHandler);
   }
 });
 

@@ -15,7 +15,7 @@
       </button>
     </div>
     <div class="nav-actions">
-      <button class="icon-button action-icon" @click="openExternalLink('https://931125.xyz/')">
+      <button class="icon-button action-icon" @click="openExternalLink('https://tv.931125.xyz/')">
         <el-icon><VideoCamera /></el-icon>
       </button>
       <button class="icon-button action-icon" @click="$emit('openBackgroundSelector')">
@@ -110,6 +110,16 @@ const navigateTo = (path) => {
       const previousRoute = localStorage.getItem('previousRouteBeforeLyrics');
       if (previousRoute) {
         console.log('[TopNavBar] 从歌词页面返回到之前的页面:', previousRoute);
+        
+        // 清除可能存在的MV相关状态标记，防止影响播放状态
+        localStorage.removeItem('musicPausedForMV');
+        localStorage.removeItem('musicWasPlaying');
+        localStorage.removeItem('isFromMV');
+        sessionStorage.removeItem('mv_return_playstate');
+        sessionStorage.removeItem('mv_return_timestamp');
+        
+        // 保证播放状态不受影响
+        if (window._fromMVToPlaylist) window._fromMVToPlaylist = false;
         
         // 尝试解析之前的路由
         try {

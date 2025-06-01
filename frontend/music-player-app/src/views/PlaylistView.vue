@@ -368,10 +368,25 @@ const loadMore = async () => {
   isLoading.value = true;
   
   try {
+    // 记录加载前的歌曲数量
+    const beforeCount = playerStore.playlist.length;
+    
     // 使用playerStore的loadMoreSongs方法加载更多歌曲
     const moreAvailable = await playerStore.loadMoreSongs(playerStore.lastSearchKeyword);
-    hasMore.value = moreAvailable;
+    
+    // 记录加载后的歌曲数量
+    const afterCount = playerStore.playlist.length;
+    
+    // 如果没有加载到新歌曲，将hasMore设置为false
+    if (beforeCount === afterCount) {
+      console.log('[PlaylistView] 没有加载到新歌曲，停止显示加载更多按钮');
+      hasMore.value = false;
+    } else {
+      // 根据API返回结果更新hasMore状态
+      hasMore.value = moreAvailable;
+    }
   } catch (error) {
+    console.error('[PlaylistView] 加载更多歌曲失败:', error);
     hasMore.value = false;
   } finally {
     isLoading.value = false;
@@ -428,17 +443,32 @@ onUnmounted(() => {
 
 // 设置交叉观察器监听滚动
 const setupIntersectionObserver = () => {
+  console.log(`[PlaylistView] 设置交叉观察器，hasMore: ${hasMore.value}, loadMoreTrigger: ${loadMoreTrigger.value ? '存在' : '不存在'}`);
+  
   // 如果没有更多内容或者触发元素不存在，则不设置观察器
-  if (!hasMore.value || !loadMoreTrigger.value) return;
+  if (!hasMore.value || !loadMoreTrigger.value) {
+    console.log('[PlaylistView] 没有更多内容或触发元素不存在，不设置观察器');
+    
+    // 如果已有观察器，断开连接
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+      console.log('[PlaylistView] 断开现有观察器连接');
+    }
+    return;
+  }
   
   // 移除旧的观察器
   if (observer) {
     observer.disconnect();
+    observer = null;
+    console.log('[PlaylistView] 断开旧观察器连接');
   }
   
   // 获取全局滚动容器
   const scrollContainer = document.querySelector('.content-area');
   if (!scrollContainer) {
+    console.warn('[PlaylistView] 找不到滚动容器.content-area，无法设置观察器');
     return;
   }
   
@@ -447,6 +477,7 @@ const setupIntersectionObserver = () => {
     const entry = entries[0];
     // 当触发元素进入视口时，加载更多内容
     if (entry.isIntersecting && !isLoading.value && hasMore.value) {
+      console.log('[PlaylistView] 触发元素进入视口，加载更多内容');
       loadMore();
     }
   }, {
@@ -457,6 +488,7 @@ const setupIntersectionObserver = () => {
   
   // 开始观察触发元素
   observer.observe(loadMoreTrigger.value);
+  console.log('[PlaylistView] 开始观察触发元素');
 };
 
 // 清空列表功能现在没有按钮，如果需要可以添加回来

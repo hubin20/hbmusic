@@ -41,6 +41,7 @@
           class="video-player"
           :src="mvUrl"
           @error="handleVideoError"
+          @abort="handleVideoAbort"
           @loadeddata="handleVideoLoaded"
           :poster="mvInfo?.cover || defaultCoverUrl"
         ></video>
@@ -101,7 +102,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, defineComponent, watch, nextTick, onActivated } from 'vue';
+import { ref, onMounted, onUnmounted, defineComponent, watch, nextTick, onActivated, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import axios from 'axios';
 import { usePlayerStore } from '../stores/player';
@@ -121,6 +122,9 @@ const route = useRoute();
 const router = useRouter();
 const playerStore = usePlayerStore();
 const videoPlayer = ref(null);
+
+// 添加用户主动离开标记
+const isUserLeaving = ref(false);
 
 const loading = ref(true);
 const error = ref(null);
@@ -157,9 +161,17 @@ const convertHttpToHttps = (url) => {
 
 /**
  * 获取MV详情和播放URL
+ * @param {boolean} forceRefresh - 是否强制刷新缓存
  */
-const fetchMVDetail = async () => {
+const fetchMVDetail = async (forceRefresh = false) => {
   const mvId = route.params.id;
+  
+  // 检查当前路由是否是MV页面，如果不是则不请求数据
+  if (!route.path.includes('/mv/')) {
+    console.log('[MVView] 当前不在MV页面，跳过MV数据获取');
+    loading.value = false;
+    return;
+  }
   
   if (!mvId) {
     error.value = '未指定MV ID';
@@ -172,7 +184,7 @@ const fetchMVDetail = async () => {
   
   // 检查是否有缓存数据
   const cacheKey = isKwMV.value ? `kw_${mvId}` : mvId;
-  if (mvCache.value[cacheKey]) {
+  if (mvCache.value[cacheKey] && !forceRefresh) {
     console.log(`使用缓存的MV数据: ${cacheKey}`);
     mvInfo.value = mvCache.value[cacheKey].info;
     mvUrl.value = convertHttpToHttps(mvCache.value[cacheKey].url); // 确保缓存的URL也转换为HTTPS
@@ -282,90 +294,13 @@ const fetchNeteaseMVDetail = async (mvId) => {
   } catch (err) {
     console.error('获取MV数据错误:', err);
     error.value = '获取MV数据失败，请稍后重试';
-  }
-};
-
-/**
- * 通过关键词尝试在酷我API中查找MV
- * @param {string} keyword - 搜索关键词
- */
-const tryFetchKwMVByKeyword = async (keyword) => {
-  try {
-    console.log(`使用关键词 "${keyword}" 在酷我搜索MV`);
     
-    // 使用酷我API搜索MV
-    const searchResponse = await axios.get(`${KW_API_URL}`, {
-      params: {
-        key: keyword,
-        type: 'mvSearch',
-        limit: 5
-      }
-    });
-    
-    if (searchResponse.data && searchResponse.data.code === 200 && 
-        Array.isArray(searchResponse.data.data) && searchResponse.data.data.length > 0) {
-      // 找到匹配的MV
-      const kwMv = searchResponse.data.data[0];
-      console.log('从酷我找到匹配的MV:', kwMv.name, kwMv.artist);
-      
-      // 设置MV信息
-      mvInfo.value = {
-        id: kwMv.id || kwMv.rid,
-        name: kwMv.name || keyword,
-        artistName: kwMv.artist || '未知歌手',
-        cover: convertHttpToHttps(kwMv.pic || defaultCoverUrl),
-        playCount: kwMv.mvPlayCnt || 0,
-        publishTime: kwMv.time || new Date().toISOString(),
-        desc: kwMv.info || `搜索关键词: ${keyword}`,
-        isFromKw: true
-      };
-      
-      // 设置MV播放地址
-      mvUrl.value = `${KW_API_URL}?id=${kwMv.id || kwMv.rid}&level=2k&type=mv&format=mp4`;
-      console.log('使用酷我MV地址:', mvUrl.value);
-      
-      // 获取相关MV
-      try {
-        const relatedResponse = await axios.get(`${KW_API_URL}`, { 
-          params: { 
-            id: kwMv.artistid || '236742508', // 使用歌手ID获取相关MV，如果没有则使用默认ID
-            page: 1,
-            limit: 6,
-            type: 'mvList'
-          } 
-        });
-        
-        if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.data)) {
-          relatedMVs.value = relatedResponse.data.data.map(item => ({
-            id: item.rid || item.vid,
-            name: item.name || '未知MV',
-            artistName: item.artist || '未知歌手',
-            cover: convertHttpToHttps(item.pic || defaultCoverUrl),
-            isFromKw: true
-          }));
-        }
-      } catch (relatedErr) {
-        console.error('获取酷我相关MV失败:', relatedErr);
-        relatedMVs.value = [];
-      }
-      
-      // 标记为酷我MV
-      isKwMV.value = true;
-      
-      // 缓存MV数据
-      mvCache.value[`kw_${kwMv.id || kwMv.rid}`] = {
-        info: mvInfo.value,
-        url: mvUrl.value,
-        related: relatedMVs.value
-      };
-      
-      error.value = null;
-    } else {
-      throw new Error('未找到匹配的酷我MV');
-    }
-  } catch (err) {
-    console.error('酷我API搜索失败:', err.message);
-    error.value = '无法找到匹配的MV，请尝试其他搜索词';
+    // 确保不会尝试使用酷我API
+    // 重置状态，防止后续请求
+    mvInfo.value = null;
+    mvUrl.value = null;
+    relatedMVs.value = [];
+    loading.value = false;
   }
 };
 
@@ -404,20 +339,8 @@ const fetchKwMVDetail = async (mvId) => {
       // 如果需要直接获取播放地址，可以添加format=mp4参数
       mvUrl.value = `${KW_API_URL}?id=${mvId}&level=2k&type=mv&format=mp4`;
       
-      // 获取相关MV
-      const relatedResponse = await axios.get(`${KW_API_URL}/mv/url`, {
-        params: { id: mvId }
-        });
-        
-        if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.data)) {
-          relatedMVs.value = relatedResponse.data.data.map(item => ({
-          id: item.id,
-            name: item.name || '未知MV',
-          artistName: item.artistName || '未知歌手',
-          cover: convertHttpToHttps(item.cover || defaultCoverUrl),
-            isFromKw: true
-          }));
-      }
+      // 获取相关MV - 移除此功能，避免额外请求
+      relatedMVs.value = [];
       
       // 缓存MV数据
       mvCache.value[`kw_${mvId}`] = {
@@ -430,13 +353,17 @@ const fetchKwMVDetail = async (mvId) => {
       const lastUpdateKey = `last_update_mv_kw_${mvId}`;
       localStorage.setItem(lastUpdateKey, Date.now().toString());
       console.log(`[MVView] 更新MV缓存时间戳: kw_${mvId}`);
-      
     } else {
       throw new Error('获取酷我MV详情失败');
     }
   } catch (err) {
     console.error('获取酷我MV数据错误:', err);
     error.value = '获取酷我MV数据失败，请稍后重试';
+    
+    // 重置状态，确保不会触发额外请求
+    mvInfo.value = null;
+    mvUrl.value = null;
+    relatedMVs.value = [];
   }
 };
 
@@ -562,7 +489,108 @@ const toggleFavorite = () => {
  * 处理返回操作
  */
 const goBack = () => {
-  router.go(-1); // 使用标准的路由返回
+  // 设置用户主动离开标记，避免触发不必要的错误日志
+  isUserLeaving.value = true;
+  
+  // 停止视频播放（如果有）
+  if (videoPlayer.value) {
+    videoPlayer.value.pause();
+    videoPlayer.value.src = ''; // 清除视频源
+  }
+  
+  // 获取查询参数
+  const isFromSearch = route.query.fromSearch === 'true';
+  const isFromFavorites = route.query.fromFavorites === 'true';
+  const isFromMV = route.query.fromMV === 'true';
+  
+  // 获取标签和搜索类型参数
+  const favoriteTab = route.query.favoriteTab;
+  const searchType = route.query.searchType;
+  const keyword = route.query.keyword;
+  
+  console.log('[MVView] 返回操作，来源参数:', {
+    isFromSearch,
+    isFromFavorites,
+    isFromMV,
+    favoriteTab,
+    searchType,
+    keyword
+  });
+  
+  // 检查之前的播放状态并恢复 - 无论是否有错误都应该检查
+  if (playerStore.currentSong) {
+    // 检查之前的播放状态
+    const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
+    
+    console.log('[MVView] 返回操作，之前音乐播放状态:', musicWasPlaying);
+    
+    // 强制恢复播放状态 - 无论之前状态如何，都尝试恢复播放
+    console.log('[MVView] 返回操作，强制恢复播放状态');
+    
+    // 设置延迟，确保路由切换完成后再恢复播放
+    setTimeout(() => {
+      playerStore.isPlaying = true;
+      // 确保音频元素也在播放
+      const audioElement = document.getElementById('audio-player');
+      if (audioElement && audioElement.paused) {
+        audioElement.play().catch(err => {
+          console.warn('[MVView] 返回时恢复播放失败:', err);
+          // 标记需要用户交互来恢复播放
+          window._needManualPlayResume = true;
+        });
+      }
+    }, 300);
+  }
+  
+  // 清除所有MV相关状态标记
+  localStorage.removeItem('musicPausedForMV');
+  localStorage.removeItem('musicWasPlaying');
+  localStorage.removeItem('isFromMV');
+  sessionStorage.removeItem('mv_return_playstate');
+  sessionStorage.removeItem('mv_return_timestamp');
+  
+  // 重置全局窗口变量，防止状态错误传递
+  if (window._fromMVToPlaylist) window._fromMVToPlaylist = false;
+  
+  // 根据来源参数决定返回路径
+  if (isFromSearch) {
+    // 返回到搜索页面，尝试保留搜索关键词和搜索类型
+    const queryParams = {};
+    
+    // 添加搜索关键词 - 注意：搜索页面使用q作为查询参数，不是keyword
+    if (keyword) {
+      queryParams.q = keyword;
+    }
+    
+    // 添加搜索类型
+    if (searchType && ['song', 'album', 'playlist', 'mv'].includes(searchType)) {
+      queryParams.type = searchType;
+    }
+    
+    console.log('[MVView] 返回搜索页面，参数:', queryParams);
+    
+    // 导航到搜索页面
+    router.push({ path: '/search', query: queryParams });
+  } else if (isFromFavorites) {
+    // 返回到收藏页面，尝试保留原来的标签页
+    const queryParams = {};
+    
+    // 添加收藏标签页
+    if (favoriteTab && ['songs', 'albums', 'playlists', 'mvs', 'rankings'].includes(favoriteTab)) {
+      queryParams.tab = favoriteTab;
+    }
+    
+    console.log('[MVView] 返回收藏页面，参数:', queryParams);
+    
+    // 导航到收藏页面
+    router.push({ path: '/favorites', query: queryParams });
+  } else if (isFromMV) {
+    // 返回到MV页面
+    router.push({ path: '/playlists', query: { tab: 'mv' } });
+  } else {
+    // 默认返回到MV页面
+    router.push({ path: '/playlists', query: { tab: 'mv' } });
+  }
 };
 
 /**
@@ -570,6 +598,11 @@ const goBack = () => {
  * @param {Event} e - 错误事件
  */
 const handleVideoError = async (e) => {
+  // 如果是用户主动离开，不记录错误
+  if (isUserLeaving.value) {
+    return;
+  }
+  
   console.error('视频加载错误:', e);
   
   // 如果当前URL不是备用URL，先尝试使用备用URL
@@ -580,42 +613,24 @@ const handleVideoError = async (e) => {
     return;
   }
   
-  // 如果已经尝试过备用URL但仍然失败，尝试使用酷我API
-  if (!mvUrl.value.includes('type=mv') && mvInfo.value) {
-    console.log('尝试从酷我获取同名MV');
-    
-    try {
-      // 获取MV名称和艺术家
-      const mvName = mvInfo.value.name;
-      const artistName = mvInfo.value.artistName;
-      
-      // 尝试使用酷我API搜索同名MV
-      const searchResponse = await axios.get(`${KW_API_URL}`, {
-        params: {
-          key: `${artistName} ${mvName}`,
-          type: 'mvSearch',
-          limit: 5
-        }
-      });
-      
-      if (searchResponse.data && searchResponse.data.code === 200 && 
-          Array.isArray(searchResponse.data.data) && searchResponse.data.data.length > 0) {
-        // 找到匹配的MV
-        const kwMv = searchResponse.data.data[0];
-        console.log('从酷我找到匹配的MV:', kwMv.name, kwMv.artist);
-        
-        // 设置MV播放地址
-        mvUrl.value = `${KW_API_URL}?id=${kwMv.id || kwMv.rid}&level=2k&type=mv&format=mp4`;
-        console.log('使用酷我MV地址:', mvUrl.value);
-        return;
+  // 尝试强制刷新MV数据
+  console.log('[MVView] 视频加载错误，尝试强制刷新MV数据');
+  fetchMVDetail(true);
+  
+  // 如果所有尝试都失败，直接显示错误
+  if (error.value) {
+    error.value = '视频加载失败，可能是版权限制或网络问题，请稍后重试';
+  
+    // 确保记录当前的音乐播放状态，以便在返回时恢复
+    if (playerStore.currentSong) {
+      // 检查当前播放状态是否已保存，如果没有则保存
+      if (localStorage.getItem('musicWasPlaying') === null) {
+        const wasPlaying = playerStore.isPlaying;
+        localStorage.setItem('musicWasPlaying', wasPlaying ? 'true' : 'false');
+        console.log(`[MVView] 视频加载错误，记录当前音乐播放状态: ${wasPlaying ? '播放中' : '已暂停'}`);
       }
-    } catch (searchErr) {
-      console.error('搜索酷我MV失败:', searchErr);
     }
   }
-  
-  // 如果所有尝试都失败
-  error.value = '视频加载失败，可能是版权限制或网络问题，请稍后重试';
 };
 
 /**
@@ -624,6 +639,15 @@ const handleVideoError = async (e) => {
 const handleVideoLoaded = () => {
   console.log('视频加载完成');
   error.value = null;
+};
+
+/**
+ * 处理视频加载中断
+ */
+const handleVideoAbort = () => {
+  console.log('[MVView] 视频加载被中断');
+  // 这通常是用户主动操作导致的，设置标记
+  isUserLeaving.value = true;
 };
 
 /**
@@ -655,6 +679,12 @@ const formatDate = (timestamp) => {
 
 // 在组件挂载时获取MV数据
 onMounted(() => {
+  // 检查当前路由是否是MV页面
+  if (!route.path.includes('/mv/')) {
+    console.log('[MVView][onMounted] 当前不在MV页面，跳过MV数据获取');
+    return;
+  }
+  
   // 从URL参数获取MV ID
   const mvId = route.params.id;
   // 检查是否是酷我MV
@@ -687,18 +717,59 @@ onMounted(() => {
 
 // 监听页面卸载，确保保存状态
 onUnmounted(() => {
-  // 当组件卸载时（例如导航到其他非MV页面），可以考虑是否清除 musicPausedForMV 标记
-  // 但如果用户是返回到播放列表，PlaylistView 会处理这个标记
-  // 如果确定要在这里清除，需要判断导航目标
-  // const goingToPlaylist = router.currentRoute.value.name === 'now-playing' || router.currentRoute.value.name === 'playlist-display';
-  // if (!goingToPlaylist) {
-  //   localStorage.removeItem('musicPausedForMV');
-  // }
+  // 重置用户离开标记
+  isUserLeaving.value = false;
+  
+  // 清除所有MV相关状态标记
+  localStorage.removeItem('musicPausedForMV');
+  localStorage.removeItem('musicWasPlaying');
+  localStorage.removeItem('isFromMV');
+  sessionStorage.removeItem('mv_return_playstate');
+  sessionStorage.removeItem('mv_return_timestamp');
+  
+  // 停止视频播放并清除视频源
+  if (videoPlayer.value) {
+    videoPlayer.value.pause();
+    videoPlayer.value.src = '';
+    videoPlayer.value.load();
+  }
+  
+  // 重置所有MV相关状态变量，防止后续请求
+  mvInfo.value = null;
+  mvUrl.value = null;
+  relatedMVs.value = [];
+  loading.value = false;
+  error.value = null;
+  
+  // 清除正在进行的请求和定时器
+  if (window._mvTimeouts) {
+    window._mvTimeouts.forEach(clearTimeout);
+    window._mvTimeouts = [];
+  }
+  
+  // 重置特殊标记，防止状态错误传递
+  if (window._fromMVToPlaylist) window._fromMVToPlaylist = false;
 });
 
 // 监听路由参数变化以重新加载MV数据
 watch(() => route.params.id, (newId, oldId) => {
+  // 检查当前路由是否是MV页面
+  if (!route.path.includes('/mv/')) {
+    console.log('[MVView] 当前不在MV页面，跳过MV数据处理');
+    return;
+  }
+  
   if (newId && newId !== oldId) { // 只有在 newId 存在且与 oldId 不同时才执行
+    // 检查是否是从歌词页面返回
+    const fromLyricsPage = localStorage.getItem('fromLyricsPage') === 'true';
+    
+    if (fromLyricsPage) {
+      // 如果是从歌词页面返回，清除标记并跳过加载
+      console.log('[MVView] 检测到从歌词页面返回，跳过MV数据加载');
+      localStorage.removeItem('fromLyricsPage');
+      return; // 直接返回，不执行后续操作
+    }
+    
     // 暂停当前可能正在播放的MV
     if (videoPlayer.value) {
       videoPlayer.value.pause();
@@ -710,14 +781,28 @@ watch(() => route.params.id, (newId, oldId) => {
     loading.value = true;
     error.value = null;
     
-    // 暂停背景音乐 (如果新MV加载时背景音乐在播放)
-    if (playerStore.isPlaying) {
-      playerStore.togglePlayPause();
-      localStorage.setItem('musicPausedForMV', 'true');
-      console.log('[MVView] 因切换MV，背景音乐已暂停');
+    // 记录当前音乐播放状态，无论是否在播放
+    if (playerStore.currentSong) {
+      const isCurrentlyPlaying = playerStore.isPlaying;
+      localStorage.setItem('musicWasPlaying', isCurrentlyPlaying ? 'true' : 'false');
+      console.log(`[MVView] 进入MV页面，记录当前音乐播放状态: ${isCurrentlyPlaying ? '播放中' : '已暂停'}`);
+      
+      // 如果当前正在播放音乐，暂停它
+      if (isCurrentlyPlaying) {
+        playerStore.togglePlayPause();
+        localStorage.setItem('musicPausedForMV', 'true');
+      }
+    } else {
+      // 如果没有当前歌曲，也记录为false
+      localStorage.setItem('musicWasPlaying', 'false');
     }
     
-    fetchMVDetail();
+    // 强制刷新MV数据，不使用缓存
+    fetchMVDetail(true);
+  } else if (newId && newId === oldId) {
+    // 如果是相同的MV ID，也强制刷新一次，确保能正常播放
+    console.log('[MVView] 检测到相同MV ID的重新访问，强制刷新数据');
+    fetchMVDetail(true);
   }
 }, { immediate: true }); // immediate: true 确保组件创建时也会基于当前ID获取数据
 
@@ -735,37 +820,37 @@ watch(() => mvInfo.value, (newInfo) => {
 
 // 监听组件激活
 onActivated(() => {
-  // 检查是否需要重新加载数据
-  if (route.params.id && !loading.value && !error.value) {
-    const mvId = route.params.id;
-    const cacheKey = isKwMV.value ? `kw_${mvId}` : `main_mv_${mvId}`;
-    const lastUpdateKey = `last_update_mv_${cacheKey}`;
-    const lastUpdate = localStorage.getItem(lastUpdateKey);
-    const now = Date.now();
-    const cacheExpired = !lastUpdate || (now - parseInt(lastUpdate, 10)) > 30 * 60 * 1000; // 30分钟缓存
+  // 检查当前路由是否是MV页面
+  if (!route.path.includes('/mv/')) {
+    console.log('[MVView][onActivated] 当前不在MV页面，跳过MV数据处理');
+    return;
+  }
+  
+  console.log('[MVView][onActivated] MV页面被激活，强制刷新数据');
+  
+  // 如果有MV ID，强制刷新数据
+  if (route.params.id) {
+    // 强制刷新MV数据
+    fetchMVDetail(true);
     
-    // 如果有缓存且未过期，使用缓存数据
-    if (mvCache.value[cacheKey] && !cacheExpired) {
-      console.log(`[MVView][onActivated] 使用缓存数据: ${cacheKey}`);
-      mvInfo.value = mvCache.value[cacheKey].info;
-      mvUrl.value = mvCache.value[cacheKey].url;
-      relatedMVs.value = mvCache.value[cacheKey].related;
-      
-      // 检查收藏状态
-      checkFavoriteStatus();
-    } else {
-      console.log(`[MVView][onActivated] 缓存不存在或已过期，重新加载数据: ${cacheKey}`);
-      // 没有缓存数据，获取新数据
-      fetchMVDetail();
-    }
-    
-    // 恢复滚动位置
-    const scrollPos = localStorage.getItem('mv_scroll_position');
-    if (scrollPos) {
-      nextTick(() => {
-        window.scrollTo(0, parseInt(scrollPos, 10));
-      });
-    }
+    // 检查收藏状态
+    checkFavoriteStatus();
+  }
+});
+
+// 添加onBeforeUnmount生命周期钩子
+onBeforeUnmount(() => {
+  // 在组件即将卸载前设置用户离开标记
+  isUserLeaving.value = true;
+  console.log('[MVView] 组件即将卸载，设置用户离开标记');
+});
+
+// 监听路由变化，检测用户是否离开MV页面
+watch(() => route.fullPath, (newPath, oldPath) => {
+  // 如果路由变化且不再是MV详情页，设置用户离开标记
+  if (newPath !== oldPath && !newPath.includes('/mv/')) {
+    isUserLeaving.value = true;
+    console.log('[MVView] 检测到路由变化，用户离开MV页面，设置离开标记');
   }
 });
 </script>

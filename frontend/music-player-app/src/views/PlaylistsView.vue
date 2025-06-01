@@ -972,25 +972,54 @@ const handlePlaylistClick = (playlist) => {
       name: 'mv-detail', // 假设MV详情页路由名为 'mv-detail'
       params: { id: mvId }
     };
+    
+    // 设置MV页面的来源标记
+    let queryParams = { fromMV: 'true' }; // 添加来源标记
+    
+    // 如果是酷我MV，添加source参数
     if (playlist.isFromKw || playlistIdStr.startsWith('kw_mv_')) {
-      navigationParams.query = { source: 'kw' }; // MV也可能需要来源
+      queryParams.source = 'kw';
     }
+    
+    navigationParams.query = queryParams;
     console.log(`[PlaylistsView] 点击了MV，ID: ${mvId}, 准备导航至:`, navigationParams);
   } else if (isRanking && playlistIdStr.includes('kw_rank_')) {
     // 对于酷我榜单，直接使用完整ID
     navigationParams = {
       name: 'playlist-detail', // 使用歌单详情页面
       params: { id: playlistIdStr },
-      query: { source: 'kw', isRanking: 'true' } // 添加标记表明这是酷我榜单
+      query: { 
+        source: 'kw', 
+        isRanking: 'true', 
+        fromRanking: 'true' // 添加来源为排行榜的标记
+      }
     };
     console.log(`[PlaylistsView] 点击了酷我榜单，ID: ${playlistIdStr}, 准备导航至:`, navigationParams);
   } else if (isKwPlaylistSource) {
     // 对于酷我API的歌单，提取真实ID并传递isFromKw参数
     const realId = playlistIdStr.startsWith('kw_') ? playlistIdStr.substring(3) : playlistIdStr;
+    
+    // 构建查询参数
+    let queryParams = { source: 'kw' };
+    
+    // 根据当前标签页添加来源标记
+    if (activeTab.value === 'ranking') {
+      queryParams.fromRanking = 'true';
+      queryParams.isRanking = 'true';
+    } else if (activeTab.value === 'mv') {
+      queryParams.fromMV = 'true';
+    } else if (activeTab.value === 'mine') {
+      // 添加来源为"您的歌单"的标记
+      queryParams.fromPlaylists = 'true';
+      queryParams.fromMine = 'true'; // 添加mine标签的标识
+    } else {
+      queryParams.fromPlaylists = 'true'; // 默认从歌单列表页来
+    }
+    
     navigationParams = {
       name: 'playlist-detail', // 使用路由名称
       params: { id: realId },
-      query: { source: 'kw' }
+      query: queryParams
     };
     console.log(`[PlaylistsView] 点击了酷我歌单，ID: ${realId}, 准备导航至:`, navigationParams);
   } else if (isRanking && playlistIdStr.startsWith('main_rank_')) {
@@ -1000,13 +1029,34 @@ const handlePlaylistClick = (playlist) => {
     navigationParams = {
       name: 'playlist-detail', // 使用歌单详情页面
       params: { id: realId },
-      query: { isRanking: 'true' } // 添加标记表明这是排行榜
+      query: { 
+        isRanking: 'true',
+        fromRanking: 'true' // 添加来源为排行榜的标记
+      }
     };
     console.log(`[PlaylistsView] 点击了排行榜，ID: ${realId}, 准备导航至:`, navigationParams);
   } else {
+    // 构建查询参数
+    let queryParams = {};
+    
+    // 根据当前标签页添加来源标记
+    if (activeTab.value === 'ranking') {
+      queryParams.fromRanking = 'true';
+      queryParams.isRanking = 'true';
+    } else if (activeTab.value === 'mv') {
+      queryParams.fromMV = 'true';
+    } else if (activeTab.value === 'mine') {
+      // 添加来源为"您的歌单"的标记
+      queryParams.fromPlaylists = 'true';
+      queryParams.fromMine = 'true'; // 添加mine标签的标识
+    } else {
+      queryParams.fromPlaylists = 'true'; // 默认从歌单列表页来
+    }
+    
     navigationParams = {
       name: 'playlist-detail', // 使用路由名称
-      params: { id: playlistIdStr }
+      params: { id: playlistIdStr },
+      query: queryParams
     };
     console.log(`[PlaylistsView] 点击了主API歌单，ID: ${playlistIdStr}, 准备导航至:`, navigationParams);
   }
@@ -1018,6 +1068,7 @@ const handlePlaylistClick = (playlist) => {
     const keyTab = `scroll_pos_${activeTab.value}`;
     localStorage.setItem(keyGeneral, scrollTop);
     localStorage.setItem(keyTab, scrollTop);
+    localStorage.setItem(`temp_scroll_${activeTab.value}`, scrollTop);
     console.log(`[PlaylistsView][handlePlaylistClick] 保存滚动位置. 通用键: ${keyGeneral}, 值: ${scrollTop}. 标签键: ${keyTab}, 值: ${scrollTop}`);
   }
 

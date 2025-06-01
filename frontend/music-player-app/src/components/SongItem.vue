@@ -73,13 +73,13 @@ const emit = defineEmits(['play-song']);
 
 // 处理点击事件
 const handleClick = (event) => {
-  emitPlaySong();
+  emitPlaySong(true); // 默认点击时自动播放
 };
 
-const emitPlaySong = () => {
+const emitPlaySong = (autoPlay = true) => {
   // 确保索引是数字类型
   const index = Number(props.index);
-  emit('play-song', { song: props.song, index: index });
+  emit('play-song', { song: props.song, index: index, autoPlay: autoPlay });
 };
 
 const displayNumber = computed(() => (props.index + 1).toString().padStart(2, '0'));

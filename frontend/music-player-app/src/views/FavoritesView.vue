@@ -421,36 +421,30 @@ const playSong = (song, index) => {
 
 // 跳转到歌单详情
 const goToPlaylist = (playlist) => {
-  // 检查是否是酷我歌单
-  const isKwPlaylist = playlist.isFromKw || playlist.source === 'kw' || 
-                      String(playlist.id).startsWith('kw_') || String(playlist.id).startsWith('kw-');
-  
-  if (isKwPlaylist) {
-    // 确保ID格式一致 - 使用kw-前缀
-    let realId = playlist.id;
-    
-    // 如果ID以kw_开头，转换为kw-格式
-    if (String(realId).startsWith('kw_')) {
-      realId = `kw-${String(realId).substring(3)}`;
-    } 
-    // 如果ID不以kw-开头，添加kw-前缀
-    else if (!String(realId).startsWith('kw-')) {
-      realId = `kw-${realId}`;
-    }
-    
-    console.log(`[FavoritesView] 跳转到酷我歌单，处理后ID: ${realId}`);
-    
-    router.push({
-      name: 'playlist-detail',
-      params: { id: realId },
-      query: { source: 'kw' }
-    });
-  } else {
-    router.push({
-      name: 'playlist-detail',
-      params: { id: playlist.id }
-    });
+  if (!playlist || !playlist.id) {
+    console.error('无效的歌单数据:', playlist);
+    return;
   }
+  
+  // 处理歌单ID
+  let playlistId = playlist.id;
+  
+  // 检查是否是酷我歌单
+  const isKwPlaylist = playlist.isFromKw || String(playlistId).startsWith('kw-');
+  
+  console.log(`[FavoritesView] 跳转到歌单，ID: ${playlistId}, 是否酷我: ${isKwPlaylist}`);
+  
+  const navigationParams = {
+    name: 'playlist-detail',
+    params: { id: playlistId },
+    query: { 
+      fromFavorites: 'true', // 添加来源标记，表示来自收藏页面
+      favoriteTab: activeTab.value, // 添加当前标签信息
+      ...(isKwPlaylist ? { source: 'kw' } : {})
+    }
+  };
+  
+  router.push(navigationParams);
 };
 
 // 跳转到MV详情
@@ -460,31 +454,35 @@ const goToMv = (mv) => {
     return;
   }
   
-  // 检查MV来源
-  const isKwMv = mv.isFromKw || String(mv.id).startsWith('kw_');
-  
   // 处理MV ID
   let mvId = mv.id;
   
-  // 如果是酷我MV，并且ID以kw_开头，提取真实ID
-  if (isKwMv && String(mvId).startsWith('kw_')) {
-    mvId = String(mvId).substring(3); // 去掉kw_前缀
+  // 检查是否是酷我MV
+  const isKwMv = mv.isFromKw || String(mvId).startsWith('kw_mv_');
+  
+  // 如果ID以kw_mv_开头，提取真实ID
+  if (String(mvId).startsWith('kw_mv_')) {
+    mvId = String(mvId).substring(6); // 去掉kw_mv_前缀
   }
-  // 如果是网易云MV，并且ID以main_mv_开头，提取真实ID
-  else if (!isKwMv && String(mvId).startsWith('main_mv_')) {
+  
+  // 如果ID以main_mv_开头，提取真实ID
+  if (String(mvId).startsWith('main_mv_')) {
     mvId = String(mvId).substring(8); // 去掉main_mv_前缀
   }
   
-  console.log(`[FavoritesView] 跳转到MV，原始ID: ${mv.id}, 处理后ID: ${mvId}, 是否酷我: ${isKwMv}`);
+  console.log(`[FavoritesView] 跳转到MV，原始ID: ${mv.id}, 处理后ID: ${mvId}, 是否酷我: ${isKwMv}, 当前标签: ${activeTab.value}`);
   
   const navigationParams = {
     name: 'mv-detail',
-    params: { id: mvId }
+    params: { id: mvId },
+    query: { 
+      fromFavorites: 'true', // 添加来源标记，表示来自收藏页面
+      favoriteTab: activeTab.value, // 添加当前标签信息
+      ...(isKwMv ? { source: 'kw' } : {})
+    }
   };
   
-  if (isKwMv) {
-    navigationParams.query = { source: 'kw' };
-  }
+  console.log('[FavoritesView] MV导航参数:', navigationParams);
   
   router.push(navigationParams);
 };
@@ -509,7 +507,11 @@ const goToRanking = (ranking) => {
   router.push({
     name: 'playlist-detail',
     params: { id: rankingId },
-    query: { isRanking: 'true' }
+    query: { 
+      isRanking: 'true',
+      fromFavorites: 'true', // 添加来源标记，表示来自收藏页面
+      favoriteTab: activeTab.value // 添加当前标签信息
+    }
   });
 };
 
@@ -520,7 +522,14 @@ const goToDiscover = () => {
 
 // 跳转到专辑详情页
 const goToAlbum = (album) => {
-  router.push({ name: 'AlbumDetail', params: { id: album.id } });
+  router.push({ 
+    name: 'AlbumDetail', 
+    params: { id: album.id },
+    query: { 
+      fromFavorites: 'true', // 添加来源标记，表示来自收藏页面
+      favoriteTab: activeTab.value // 添加当前标签信息
+    } 
+  });
 };
 
 // 移除收藏

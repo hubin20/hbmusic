@@ -705,7 +705,19 @@ const playAllSongs = () => {
       kwRid: song.kwRid || song.rid,
       source: song.source || (song.isFromKw ? 'kw' : 'main'),
     }));
-    playerStore.playPlaylist(queue, playlistDetail.value.id);
+    
+    // 清除可能的搜索结果缓存
+    playerStore.resetSearchState();
+    
+    console.log(`[PlaylistDetailView] 播放全部歌曲，完全替换播放列表，共${queue.length}首`);
+    
+    // 先设置播放列表，完全替换当前列表
+    playerStore.setPlaylist(queue, true);
+    
+    // 然后播放第一首歌曲
+    if (queue.length > 0) {
+      playerStore.playSong(queue[0], 0, playlistDetail.value.id);
+    }
   } else {
     console.warn('[PlaylistDetailView] 歌单中没有歌曲可以播放。');
   }
@@ -748,11 +760,18 @@ const playSong = (song, index) => {
     };
     
     // 直接调用播放器存储的播放方法
-    console.log(`[PlaylistDetailView] 调用播放器播放歌曲: ${songToPlay.name}`);
+    console.log(`[PlaylistDetailView] 调用播放器播放歌曲: ${songToPlay.name}, 完全替换播放列表`);
+    
+    // 清除可能的搜索结果缓存
+    playerStore.resetSearchState();
     
     // 使用nextTick确保DOM更新后再播放
     nextTick(() => {
-      playerStore.playSong(songToPlay, playContext, playlistDetail.value?.id);
+      // 先设置播放列表，完全替换当前列表
+      playerStore.setPlaylist(fullQueue, true);
+      
+      // 然后播放选中的歌曲
+      playerStore.playSong(songToPlay, index, playlistDetail.value?.id);
       
       // 确保播放状态更新
       setTimeout(() => {
@@ -1047,9 +1066,146 @@ onUnmounted(() => {
  * 返回歌单列表页面
  */
 const goBack = () => {
-  // 直接导航到歌单列表页，不使用浏览器的返回功能
-  router.push('/playlists');
+  // 获取查询参数
+  const isRanking = route.query.isRanking === 'true';
+  const isFromSearch = route.query.fromSearch === 'true';
+  const isFromFavorites = route.query.fromFavorites === 'true';
+  const isFromRanking = route.query.fromRanking === 'true';
+  const isFromMV = route.query.fromMV === 'true';
+  const isFromPlaylists = route.query.fromPlaylists === 'true';
+  const isFromMine = route.query.fromMine === 'true';
+  
+  // 获取标签和搜索类型参数
+  const favoriteTab = route.query.favoriteTab;
+  const searchType = route.query.searchType;
+  const keyword = route.query.keyword;
+  
+  console.log('[PlaylistDetailView] 返回操作，来源参数:', {
+    isRanking,
+    isFromSearch,
+    isFromFavorites,
+    isFromRanking,
+    isFromMV,
+    isFromPlaylists,
+    isFromMine,
+    favoriteTab,
+    searchType,
+    keyword
+  });
+  
+  // 根据来源参数决定返回路径
+  if (isFromSearch) {
+    // 返回到搜索页面，尝试保留搜索关键词和搜索类型
+    const queryParams = {};
+    
+    // 添加搜索关键词
+    if (keyword) {
+      queryParams.q = keyword;
+    }
+    
+    // 添加搜索类型
+    if (searchType && ['song', 'album', 'playlist', 'mv'].includes(searchType)) {
+      queryParams.type = searchType;
+    }
+    
+    // 导航到搜索页面
+    router.push({ path: '/search', query: queryParams });
+  } else if (isFromFavorites) {
+    // 返回到收藏页面，尝试保留原来的标签页
+    const queryParams = {};
+    
+    // 添加收藏标签页
+    if (favoriteTab && ['songs', 'albums', 'playlists', 'mvs', 'rankings'].includes(favoriteTab)) {
+      queryParams.tab = favoriteTab;
+    }
+    
+    // 导航到收藏页面
+    router.push({ path: '/favorites', query: queryParams });
+  } else if (isFromRanking || isRanking) {
+    // 返回到排行榜页面
+    router.push({ path: '/playlists', query: { tab: 'ranking' } });
+  } else if (isFromMV) {
+    // 返回到MV页面
+    router.push({ path: '/playlists', query: { tab: 'mv' } });
+  } else if (isFromMine) {
+    // 返回到"您的歌单"标签页
+    console.log('[PlaylistDetailView] 返回到"您的歌单"标签页');
+    router.push({ path: '/playlists', query: { tab: 'mine' } });
+  } else if (isFromPlaylists) {
+    // 检查是否从"您的歌单"标签页进入
+    const creatorId = playlistDetail.value?.creator?.userId;
+    const userInfo = localStorage.getItem('netease_user_info');
+    const userInfoObj = userInfo ? JSON.parse(userInfo) : null;
+    const userId = userInfoObj?.userId;
+    
+    // 如果是用户自己的歌单，返回到"您的歌单"标签页
+    if (creatorId && userId && String(creatorId) === String(userId)) {
+      console.log('[PlaylistDetailView] 识别为用户歌单，返回到"您的歌单"标签页');
+      router.push({ path: '/playlists', query: { tab: 'mine' } });
+    } else {
+      // 否则返回到歌单列表页面
+      router.push({ path: '/playlists', query: { tab: 'all' } });
+    }
+  } else {
+    // 尝试根据歌单类型智能判断返回位置
+    const creatorId = playlistDetail.value?.creator?.userId;
+    const userInfo = localStorage.getItem('netease_user_info');
+    const userInfoObj = userInfo ? JSON.parse(userInfo) : null;
+    const userId = userInfoObj?.userId;
+    
+    // 如果是用户自己的歌单，返回到"您的歌单"标签页
+    if (creatorId && userId && String(creatorId) === String(userId)) {
+      console.log('[PlaylistDetailView] 默认返回，识别为用户歌单，返回到"您的歌单"标签页');
+      router.push({ path: '/playlists', query: { tab: 'mine' } });
+    } else {
+      // 否则默认返回到歌单列表页
+      router.push('/playlists');
+    }
+  }
 };
+
+// 监听路由变化，处理从MV返回的情况
+watch(() => route.fullPath, (newPath, oldPath) => {
+  // 检查是否从MV页面返回
+  if (oldPath && oldPath.includes('/mv/') && newPath.includes('/playlist')) {
+    console.log('[PlaylistDetailView] 检测到从MV页面返回');
+    
+    // 检查之前的播放状态
+    const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
+    console.log('[PlaylistDetailView] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
+    
+    // 强制恢复播放，无论之前状态如何
+    if (playerStore.currentSong) {
+      console.log('[PlaylistDetailView] 从MV返回，强制恢复音乐播放');
+      setTimeout(() => {
+        // 设置播放状态
+        playerStore.isPlaying = true;
+        
+        // 确保音频元素也在播放
+        const audioElement = document.getElementById('audio-player');
+        if (audioElement && audioElement.paused) {
+          audioElement.play().catch(err => {
+            console.warn('[PlaylistDetailView] 返回时恢复播放失败:', err);
+            // 标记需要用户交互来恢复播放
+            window._needManualPlayResume = true;
+            
+            // 再次尝试播放
+            setTimeout(() => {
+              console.log('[PlaylistDetailView] 再次尝试恢复播放');
+              audioElement.play().catch(() => {
+                console.warn('[PlaylistDetailView] 二次尝试播放失败，需要用户交互');
+              });
+            }, 1000);
+          });
+        }
+      }, 300);
+    }
+    
+    // 清除MV相关状态标记
+    localStorage.removeItem('musicPausedForMV');
+    localStorage.removeItem('musicWasPlaying');
+  }
+});
 </script>
 
 <style scoped>

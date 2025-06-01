@@ -457,22 +457,55 @@ watch(() => router.currentRoute.value.path, (newPath, oldPath) => {
   if (isFromMV || window._fromMVToPlaylist) {
     console.log('[PlayerControls] 检测到从MV页面返回播放页面');
     
-    // 添加多重保障，确保音频正常播放
-    if (playerStore.currentSong && playerStore.isPlaying && audioPlayer.value) {
+    // 清除所有MV相关状态标记
+    localStorage.removeItem('musicPausedForMV');
+    localStorage.removeItem('isFromMV');
+    sessionStorage.removeItem('mv_return_playstate');
+    sessionStorage.removeItem('mv_return_timestamp');
+    
+    // 检查之前的播放状态
+    const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
+    console.log('[PlayerControls] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
+    
+    // 确保音频状态与播放器状态一致
+    if (playerStore.currentSong && audioPlayer.value) {
       // 延迟执行，确保DOM已更新
       setTimeout(() => {
-        // 如果音频已暂停，尝试恢复播放
+        // 强制恢复播放 - 无论之前状态如何
+        console.log('[PlayerControls] 从MV页面返回，强制恢复播放');
+        
+        // 设置播放状态为true
+        if (!playerStore.isPlaying) {
+          console.log('[PlayerControls] 设置播放状态为true');
+          playerStore.isPlaying = true;
+        }
+        
+        // 确保音频播放
         if (audioPlayer.value.paused) {
           console.log('[PlayerControls] 尝试恢复音频播放');
           audioPlayer.value.play().catch(err => {
             console.warn('[PlayerControls] 自动恢复播放失败:', err);
-            
-            // 如果自动播放失败，设置一个标志，用于后续用户交互时恢复
             window._needManualPlayResume = true;
+            
+            // 再次尝试播放
+            setTimeout(() => {
+              console.log('[PlayerControls] 再次尝试恢复播放');
+              audioPlayer.value.play().catch(() => {
+                console.warn('[PlayerControls] 二次尝试播放失败，需要用户交互');
+              });
+            }, 1000);
           });
         }
+        
+        // 清除记录
+        localStorage.removeItem('musicWasPlaying');
       }, 300);
     }
+    
+    // 清除窗口变量，防止状态错误传递
+    setTimeout(() => {
+      window._fromMVToPlaylist = false;
+    }, 1000);
   }
 });
 
@@ -495,10 +528,17 @@ watch(() => playerStore.showLyricsView, (showLyrics) => {
   if (!showLyrics && !isVisible.value) {
     isVisible.value = true;
     
+    // 清除可能残留的MV相关状态
+    localStorage.removeItem('musicPausedForMV');
+    
     // 检查是否需要恢复播放
     if (playerStore.isPlaying && audioPlayer.value && audioPlayer.value.paused) {
+      console.log('[PlayerControls] 从歌词视图返回，尝试恢复播放');
       setTimeout(() => {
-        audioPlayer.value.play().catch(() => {});
+        audioPlayer.value.play().catch((err) => {
+          console.warn('[PlayerControls] 从歌词视图返回恢复播放失败:', err);
+          window._needManualPlayResume = true;
+        });
       }, 100);
     }
   } else if (showLyrics && isVisible.value) {

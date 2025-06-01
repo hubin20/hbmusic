@@ -165,6 +165,9 @@ const formatSongData = (song, albumInfo) => {
 
 const playAllAlbumSongs = () => {
   if (albumData.value && albumData.value.songs.length > 0) {
+    // 重置搜索状态
+    playerStore.resetSearchState();
+    
     const formattedSongs = albumData.value.songs.map(song => formatSongData(song, albumData.value.album));
     playerStore.setPlaylist(formattedSongs, true); // 替换当前播放列表
     playerStore.playSong(playerStore.playlist[0], 0); // 播放第一首
@@ -175,6 +178,9 @@ const playSelectedSongFromAlbum = (songData) => {
   // songData 已经是格式化后的，包含了index
   // 需要确保播放列表是当前专辑的歌曲列表
   if (playerStore.currentSong?.albumId !== albumData.value.album.id) {
+    // 重置搜索状态
+    playerStore.resetSearchState();
+    
     // 如果当前播放的歌曲不属于这个专辑，或者播放列表不是这个专辑的，则先设置播放列表
     const formattedSongs = albumData.value.songs.map(song => formatSongData(song, albumData.value.album));
     playerStore.setPlaylist(formattedSongs, true);
@@ -238,12 +244,63 @@ const checkFavoriteStatus = () => {
  * 返回上一页
  */
 const goBack = () => {
-  // 如果历史记录中有上一页，使用back()返回
-  if (window.history.length > 1) {
-    router.back();
+  // 获取查询参数
+  const isFromSearch = route.query.fromSearch === 'true';
+  const isFromFavorites = route.query.fromFavorites === 'true';
+  
+  // 获取标签和搜索类型参数
+  const favoriteTab = route.query.favoriteTab;
+  const searchType = route.query.searchType;
+  const keyword = route.query.keyword;
+  
+  console.log('[AlbumDetailView] 返回操作，来源参数:', {
+    isFromSearch,
+    isFromFavorites,
+    favoriteTab,
+    searchType,
+    keyword
+  });
+  
+  // 根据来源参数决定返回路径
+  if (isFromSearch) {
+    // 返回到搜索页面，尝试保留搜索关键词和搜索类型
+    const queryParams = {};
+    
+    // 添加搜索关键词 - 注意：搜索页面使用q作为查询参数，不是keyword
+    if (keyword) {
+      queryParams.q = keyword;
+    }
+    
+    // 添加搜索类型
+    if (searchType && ['song', 'album', 'playlist', 'mv'].includes(searchType)) {
+      queryParams.type = searchType;
+    }
+    
+    console.log('[AlbumDetailView] 返回搜索页面，参数:', queryParams);
+    
+    // 导航到搜索页面
+    router.push({ path: '/search', query: queryParams });
+  } else if (isFromFavorites) {
+    // 返回到收藏页面，尝试保留原来的标签页
+    const queryParams = {};
+    
+    // 添加收藏标签页
+    if (favoriteTab && ['songs', 'albums', 'playlists', 'mvs', 'rankings'].includes(favoriteTab)) {
+      queryParams.tab = favoriteTab;
+    }
+    
+    console.log('[AlbumDetailView] 返回收藏页面，参数:', queryParams);
+    
+    // 导航到收藏页面
+    router.push({ path: '/favorites', query: queryParams });
   } else {
-    // 否则直接导航到首页
-    router.push('/');
+    // 默认尝试使用浏览器历史返回，如果没有历史则返回首页
+    console.log('[AlbumDetailView] 使用浏览器历史返回');
+    if (window.history.length > 1) {
+      router.back();
+    } else {
+      router.push('/');
+    }
   }
 };
 
