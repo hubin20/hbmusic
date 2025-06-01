@@ -369,7 +369,7 @@ export const getCachedSongUrl = async (songId) => {
     // 确保返回的对象中包含时间戳
     return {
       ...cachedData.songs[songId].details,
-      timestamp: cachedData.songs[songId].timestamp
+      timestamp: cachedData.songs[songId].timestamp || Date.now() - 8 * 24 * 60 * 60 * 1000 // 如果没有时间戳，设置为8天前（确保会刷新）
     };
   }
 
@@ -382,13 +382,13 @@ export const getCachedSongUrl = async (songId) => {
         cachedData.songs[songId] = {};
       }
       cachedData.songs[songId].details = result.details;
-      cachedData.songs[songId].timestamp = result.timestamp;
+      cachedData.songs[songId].timestamp = result.timestamp || Date.now() - 8 * 24 * 60 * 60 * 1000;
 
       // console.log(`[DataCache] 使用IndexedDB缓存的歌曲详情: ID ${songId}`, result.details);
       // 确保返回的对象中包含时间戳
       return {
         ...result.details,
-        timestamp: result.timestamp
+        timestamp: result.timestamp || Date.now() - 8 * 24 * 60 * 60 * 1000 // 如果没有时间戳，设置为8天前（确保会刷新）
       };
     }
   } catch (error) {

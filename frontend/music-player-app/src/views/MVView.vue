@@ -261,7 +261,7 @@ const fetchNeteaseMVDetail = async (mvId) => {
         name: mvData.name || '未知MV',
         artistName: mvData.artistName || '未知歌手',
         cover: convertHttpToHttps(mvData.cover || defaultCoverUrl),
-        isFromKw: false
+          isFromKw: false
       }];
       
       // 缓存MV数据
@@ -407,16 +407,16 @@ const fetchKwMVDetail = async (mvId) => {
       // 获取相关MV
       const relatedResponse = await axios.get(`${KW_API_URL}/mv/url`, {
         params: { id: mvId }
-      });
-      
-      if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.data)) {
-        relatedMVs.value = relatedResponse.data.data.map(item => ({
+        });
+        
+        if (relatedResponse.data && relatedResponse.data.code === 200 && Array.isArray(relatedResponse.data.data)) {
+          relatedMVs.value = relatedResponse.data.data.map(item => ({
           id: item.id,
-          name: item.name || '未知MV',
+            name: item.name || '未知MV',
           artistName: item.artistName || '未知歌手',
           cover: convertHttpToHttps(item.cover || defaultCoverUrl),
-          isFromKw: true
-        }));
+            isFromKw: true
+          }));
       }
       
       // 缓存MV数据

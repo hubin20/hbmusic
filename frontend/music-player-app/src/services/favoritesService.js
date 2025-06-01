@@ -58,7 +58,8 @@ export const addToFavorites = (type, item) => {
       // 即使这些字段在item中不存在，也预留占位，确保结构一致
       const keysToPreserve = [
         'id', 'name', 'artist', 'album', 'albumId', 'albumArt',
-        'duration', 'isFromKw', 'url', 'directPlayUrl', 'isFallbackDirect'
+        'duration', 'isFromKw', 'url', 'directPlayUrl', 'isFallbackDirect',
+        'rid', 'originalData', 'lyricist', 'composer', 'timestamp'
       ];
 
       // 使用上述字段创建一个新对象
@@ -72,9 +73,30 @@ export const addToFavorites = (type, item) => {
       // 添加时间戳，用于后续判断是否需要刷新
       enhancedItem.favoritedAt = Date.now();
 
+      // 检查是否是酷我API的歌曲
+      const isKwSong = item.isFromKw === true;
+
+      // 确保酷我API标记正确保存
+      if (isKwSong) {
+        enhancedItem.isFromKw = true;
+        enhancedItem.forceRefreshUrl = true; // 添加标记，强制在播放时刷新URL
+
+        // 确保rid字段存在，这对于酷我API歌曲非常重要
+        if (item.rid) {
+          enhancedItem.rid = item.rid;
+        }
+
+        console.log(`[FavoritesService] 收藏酷我歌曲: ${item.name}, ID: ${item.id}, RID: ${item.rid || '未知'}`);
+      }
+
+      // 如果有url但没有timestamp，添加当前时间作为timestamp
+      if (enhancedItem.url && !enhancedItem.timestamp) {
+        enhancedItem.timestamp = Date.now();
+      }
+
       itemToSave = enhancedItem;
 
-      console.log(`[FavoritesService] 收藏歌曲: ${item.name}, ID: ${item.id}`);
+      console.log(`[FavoritesService] 收藏歌曲: ${item.name}, ID: ${item.id}, 是否包含URL: ${!!enhancedItem.url}, 是否酷我歌曲: ${!!enhancedItem.isFromKw}`);
     }
 
     // 添加到收藏
