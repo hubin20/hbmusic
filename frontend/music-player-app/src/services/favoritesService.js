@@ -77,7 +77,9 @@ export const addToFavorites = (type, item) => {
       const isKwSong = item.isFromKw === true ||
         (item.rid !== undefined && item.rid !== null) ||
         (typeof item.id === 'string' &&
-          (item.id.startsWith('kw_') || item.id.startsWith('kw-')));
+          (item.id.startsWith('kw_') || item.id.startsWith('kw-'))) ||
+        (item.source === 'kw') ||
+        (item.originalData && item.originalData.source === 'kw');
 
       // 确保酷我API标记正确保存
       if (isKwSong) {
@@ -214,9 +216,10 @@ export const getFavoritesCount = (type) => {
  * @param {string} songId - 歌曲ID
  * @param {string} newUrl - 新的URL
  * @param {number} timestamp - 时间戳，如果不提供则使用当前时间
+ * @param {object} additionalInfo - 额外需要更新的信息
  * @returns {boolean} - 是否成功更新
  */
-export const updateFavoriteSongUrl = (songId, newUrl, timestamp = null) => {
+export const updateFavoriteSongUrl = (songId, newUrl, timestamp = null, additionalInfo = {}) => {
   if (!songId || !newUrl) {
     console.error('[FavoritesService] 更新收藏歌曲URL失败: 无效的参数');
     return false;
@@ -238,6 +241,31 @@ export const updateFavoriteSongUrl = (songId, newUrl, timestamp = null) => {
     songs[songIndex].url = newUrl;
     songs[songIndex].timestamp = timestamp || Date.now();
 
+    // 更新其他可能的字段
+    if (additionalInfo.directPlayUrl) {
+      songs[songIndex].directPlayUrl = additionalInfo.directPlayUrl;
+    }
+
+    if (additionalInfo.isFallbackDirect !== undefined) {
+      songs[songIndex].isFallbackDirect = additionalInfo.isFallbackDirect;
+    }
+
+    if (additionalInfo.rid) {
+      songs[songIndex].rid = additionalInfo.rid;
+    }
+
+    // 确保isFromKw标记正确
+    if (additionalInfo.isFromKw !== undefined) {
+      songs[songIndex].isFromKw = additionalInfo.isFromKw;
+    } else if (songs[songIndex].rid ||
+      (typeof songs[songIndex].id === 'string' &&
+        (songs[songIndex].id.startsWith('kw_') || songs[songIndex].id.startsWith('kw-')))) {
+      songs[songIndex].isFromKw = true;
+    }
+
+    // 重置强制刷新标记
+    songs[songIndex].forceRefreshUrl = false;
+
     // 保存回本地存储
     localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(songs));
 
@@ -249,6 +277,131 @@ export const updateFavoriteSongUrl = (songId, newUrl, timestamp = null) => {
   }
 };
 
+/**
+ * 批量更新收藏歌曲的信息
+ * @param {Array} updatedSongs - 更新后的歌曲数组
+ * @returns {boolean} - 是否成功更新
+ */
+export const batchUpdateFavoriteSongs = (updatedSongs) => {
+  if (!Array.isArray(updatedSongs) || updatedSongs.length === 0) {
+    console.error('[FavoritesService] 批量更新收藏歌曲失败: 无效的参数');
+    return false;
+  }
+
+  try {
+    localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(updatedSongs));
+    console.log(`[FavoritesService] 批量更新收藏歌曲成功，共更新${updatedSongs.length}首歌曲`);
+    return true;
+  } catch (err) {
+    console.error('[FavoritesService] 批量更新收藏歌曲时出错:', err);
+    return false;
+  }
+};
+
+/**
+ * 修复收藏歌曲中的isFromKw标记
+ * @returns {boolean} - 是否成功修复
+ */
+export const fixFavoriteSongsKwFlag = () => {
+  try {
+    const songs = getFavorites('SONGS');
+    if (songs.length === 0) return true;
+
+    let updated = false;
+
+    const fixedSongs = songs.map(song => {
+      // 检查是否是酷我歌曲
+      const isKwSong = song.rid ||
+        (typeof song.id === 'string' &&
+          (song.id.startsWith('kw_') || song.id.startsWith('kw-'))) ||
+        (song.source === 'kw') ||
+        (song.originalData && song.originalData.source === 'kw');
+
+      // 如果标记不正确，进行修复
+      if (isKwSong && !song.isFromKw) {
+        updated = true;
+        console.log(`[FavoritesService] 修复酷我歌曲标记: ${song.name}, ID: ${song.id}`);
+        return {
+          ...song,
+          isFromKw: true,
+          forceRefreshUrl: true // 强制在下次播放时刷新URL
+        };
+      }
+
+      return song;
+    });
+
+    // 如果有更新，保存回本地存储
+    if (updated) {
+      localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(fixedSongs));
+      console.log(`[FavoritesService] 成功修复收藏歌曲的酷我标记`);
+    } else {
+      console.log(`[FavoritesService] 收藏歌曲的酷我标记无需修复`);
+    }
+
+    return true;
+  } catch (err) {
+    console.error('[FavoritesService] 修复收藏歌曲酷我标记时出错:', err);
+    return false;
+  }
+};
+
+/**
+ * 修复网易云收藏歌曲的URL
+ * @returns {boolean} - 是否成功修复
+ */
+export const fixNeteaseFavoriteSongs = () => {
+  try {
+    const songs = getFavorites('SONGS');
+    if (songs.length === 0) return true;
+
+    let updated = false;
+
+    const fixedSongs = songs.map(song => {
+      // 检查是否是网易云歌曲（非酷我歌曲）
+      const isNeteaseSong = !song.isFromKw &&
+        !song.rid &&
+        !(typeof song.id === 'string' &&
+          (song.id.startsWith('kw_') || song.id.startsWith('kw-'))) &&
+        !(song.source === 'kw') &&
+        !(song.originalData && song.originalData.source === 'kw');
+
+      // 如果是网易云歌曲，检查URL
+      if (isNeteaseSong) {
+        const isUrlExpired = song.timestamp && (Date.now() - song.timestamp > 7 * 24 * 60 * 60 * 1000);
+        const isUrlInvalid = !song.url || song.url.includes('null');
+
+        if (isUrlExpired || isUrlInvalid) {
+          updated = true;
+          console.log(`[FavoritesService] 修复网易云歌曲URL: ${song.name}, ID: ${song.id}`);
+          return {
+            ...song,
+            url: null,
+            directPlayUrl: null,
+            forceRefreshUrl: true,
+            timestamp: null
+          };
+        }
+      }
+
+      return song;
+    });
+
+    // 如果有更新，保存回本地存储
+    if (updated) {
+      localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(fixedSongs));
+      console.log(`[FavoritesService] 成功修复网易云收藏歌曲的URL`);
+    } else {
+      console.log(`[FavoritesService] 网易云收藏歌曲的URL无需修复`);
+    }
+
+    return true;
+  } catch (err) {
+    console.error('[FavoritesService] 修复网易云收藏歌曲URL时出错:', err);
+    return false;
+  }
+};
+
 export default {
   getFavorites,
   addToFavorites,
@@ -256,5 +409,8 @@ export default {
   isFavorited,
   clearFavorites,
   getFavoritesCount,
-  updateFavoriteSongUrl
+  updateFavoriteSongUrl,
+  batchUpdateFavoriteSongs,
+  fixFavoriteSongsKwFlag,
+  fixNeteaseFavoriteSongs
 }; 

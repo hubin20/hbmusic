@@ -293,7 +293,7 @@ const performSearch = async (query, isLoadMore = false) => {
         // 使用playerStore的searchSongs方法，而不是直接调用API
         // 保存搜索关键词
         playerStore.lastSearchKeyword = query;
-        
+
         if (isLoadMore) {
           // 加载更多使用loadMoreSongs方法
           console.log(`[SearchView] 加载更多搜索结果，关键词: ${query}, 偏移量: ${offset.value}`);
@@ -350,6 +350,9 @@ const performSearch = async (query, isLoadMore = false) => {
           const currentSong = playerStore.currentSong;
           const currentSongIndex = playerStore.currentSongIndex;
           const isPlaying = playerStore.isPlaying;
+          
+          // 重置playerStore的搜索状态，确保完全刷新
+          playerStore.resetSearchState();
           
           // 搜索歌曲但不替换当前播放列表，强制跳过缓存
           console.log(`[SearchView] 执行搜索，关键词: ${query}, 强制跳过缓存`);
