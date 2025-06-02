@@ -284,6 +284,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { getFavorites, removeFromFavorites } from '../services/favoritesService';
 import { usePlayerStore } from '../stores/player';
 import { Close } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 
 // 定义组件名称以支持keep-alive
 defineComponent({
@@ -309,7 +310,26 @@ const favoriteAlbums = ref([]);
 
 // 计算属性：判断是否是当前播放的歌曲
 const isCurrentSong = (songId) => {
-  return playerStore.currentSong && playerStore.currentSong.id === songId;
+  if (!playerStore.currentSong || !songId) return false;
+  
+  // 转换为字符串进行比较，避免类型不匹配
+  const currentId = String(playerStore.currentSong.id);
+  const compareId = String(songId);
+  
+  // 直接ID匹配
+  if (currentId === compareId) return true;
+  
+  // 处理可能的ID前缀情况
+  if (currentId.startsWith('kw_') && compareId.endsWith(currentId.substring(3))) return true;
+  if (compareId.startsWith('kw_') && currentId.endsWith(compareId.substring(3))) return true;
+  
+  if (currentId.startsWith('main_') && compareId.endsWith(currentId.substring(5))) return true;
+  if (compareId.startsWith('main_') && currentId.endsWith(compareId.substring(5))) return true;
+  
+  // 检查酷我歌曲的rid匹配
+  if (playerStore.currentSong.rid && playerStore.currentSong.rid === songId) return true;
+  
+  return false;
 };
 
 // 计算属性：是否正在播放
@@ -377,11 +397,26 @@ const playSong = (song, index) => {
       id: String(song.id)
     };
     
+    // 始终强制刷新URL，确保获取最新的播放地址
+    songToPlay.forceRefreshUrl = true;
+    songToPlay.timestamp = null;
+    
+    // 对于酷我歌曲，特别标记
+    if (songToPlay.isFromKw) {
+      console.log(`[FavoritesView] 检测到酷我歌曲，特别处理: ${song.name}`);
+      // 确保rid字段存在
+      if (song.rid) {
+        songToPlay.rid = song.rid;
+      }
+    }
+    
+    console.log(`[FavoritesView] 播放收藏歌曲，强制刷新URL: ${song.name}, isFromKw: ${songToPlay.isFromKw}`);
+    
     // 构建完整的播放上下文，确保包含必要信息
     const playContext = {
       index: index,
       fullQueue: favoriteSongs.value,
-      forceRefreshUrl: true // 强制刷新URL标志，确保获取最新的播放地址
+      forceRefreshUrl: true
     };
     
     // 使用nextTick确保DOM更新后再播放
@@ -391,10 +426,15 @@ const playSong = (song, index) => {
         .catch(error => {
           console.error(`[FavoritesView] 播放歌曲时出错:`, error);
           
-          // 如果播放失败，尝试再次播放
+          // 如果播放失败，尝试再次播放并强制刷新URL
           setTimeout(() => {
-            console.log(`[FavoritesView] 第一次播放失败，尝试重新播放`);
-            playerStore.playSong(songToPlay, playContext);
+            console.log(`[FavoritesView] 第一次播放失败，尝试重新播放并强制刷新URL`);
+            songToPlay.forceRefreshUrl = true;
+            songToPlay.url = null; // 清除可能失效的URL
+            playerStore.playSong(songToPlay, {
+              ...playContext,
+              forceRefreshUrl: true
+            });
           }, 800);
         });
       
@@ -409,6 +449,97 @@ const playSong = (song, index) => {
           if (audioElement) {
             audioElement.play().catch(err => {
               console.error('[FavoritesView] 强制播放失败:', err);
+              
+              // 如果强制播放失败，尝试完全重新获取歌曲信息并播放
+              setTimeout(() => {
+                console.log(`[FavoritesView] 强制播放失败，尝试完全重新获取歌曲信息`);
+                
+                // 完全清除URL相关信息
+                const freshSongToPlay = {
+                  ...songToPlay,
+                  url: null,
+                  directPlayUrl: null,
+                  timestamp: null,
+                  forceRefreshUrl: true,
+                  _retryCount: (songToPlay._retryCount || 0) + 1
+                };
+                
+                // 最多重试3次
+                if (freshSongToPlay._retryCount <= 3) {
+                  playerStore.playSong(freshSongToPlay, {
+                    ...playContext,
+                    forceRefreshUrl: true
+                  });
+                } else {
+                  // 超过重试次数，显示错误信息
+                  console.error(`[FavoritesView] 歌曲 ${song.name} 多次尝试播放失败，可能是URL无效或受限`);
+                  ElMessage.error(`歌曲 ${song.name} 无法播放，正在尝试备用方法...`);
+                  
+                  // 尝试使用备用API获取URL
+                  playerStore._fetchSongUrlFromFallbackApi(freshSongToPlay)
+                    .then(songDetails => {
+                      if (songDetails && songDetails.url) {
+                        console.log(`[FavoritesView] 成功从备用API获取URL，尝试播放`);
+                        freshSongToPlay.url = songDetails.url;
+                        freshSongToPlay.directPlayUrl = songDetails.directPlayUrl;
+                        freshSongToPlay.isFallbackDirect = songDetails.isFallbackDirect;
+                        freshSongToPlay.timestamp = Date.now();
+                        
+                        // 更新收藏中的URL
+                        try {
+                          const { updateFavoriteSongUrl } = require('../services/favoritesService');
+                          updateFavoriteSongUrl(freshSongToPlay.id, songDetails.url);
+                          console.log(`[FavoritesView] 已更新收藏歌曲URL: ${freshSongToPlay.name}`);
+                        } catch (e) {
+                          console.error('[FavoritesView] 更新收藏URL失败:', e);
+                        }
+                        
+                        // 尝试播放
+                        playerStore.playSong(freshSongToPlay, playContext);
+                      } else {
+                        // 如果备用API也失败，尝试搜索相同歌曲
+                        console.log(`[FavoritesView] 备用API获取URL失败，尝试搜索相同歌曲`);
+                        ElMessage.info(`正在搜索歌曲 ${song.name} - ${song.artist}...`);
+                        
+                        // 构建搜索关键词
+                        const searchKeyword = `${song.name} ${song.artist}`;
+                        
+                        // 搜索歌曲
+                        playerStore.searchSongs(searchKeyword, true, false, true, false)
+                          .then(searchResults => {
+                            if (searchResults && searchResults.length > 0) {
+                              // 找到匹配的歌曲
+                              const matchingSong = searchResults.find(s => 
+                                s.name === song.name && 
+                                (s.artist === song.artist || s.artist.includes(song.artist) || song.artist.includes(s.artist))
+                              ) || searchResults[0];
+                              
+                              console.log(`[FavoritesView] 搜索到匹配歌曲，尝试播放: ${matchingSong.name}`);
+                              ElMessage.success(`找到歌曲 ${matchingSong.name}，正在播放...`);
+                              
+                              // 播放搜索到的歌曲
+                              playerStore.playSong(matchingSong, {
+                                index: 0,
+                                fullQueue: searchResults,
+                                forceRefreshUrl: true
+                              });
+                            } else {
+                              console.error(`[FavoritesView] 未搜索到匹配歌曲: ${song.name}`);
+                              ElMessage.error(`未找到歌曲 ${song.name}，请尝试其他歌曲`);
+                            }
+                          })
+                          .catch(searchErr => {
+                            console.error('[FavoritesView] 搜索歌曲失败:', searchErr);
+                            ElMessage.error(`搜索歌曲失败，请稍后重试`);
+                          });
+                      }
+                    })
+                    .catch(err => {
+                      console.error('[FavoritesView] 备用API获取URL失败:', err);
+                      ElMessage.error(`获取歌曲URL失败，请稍后重试`);
+                    });
+                }
+              }, 1000);
             });
           }
         }
@@ -416,6 +547,7 @@ const playSong = (song, index) => {
     });
   } catch (err) {
     console.error('播放收藏歌曲失败:', err);
+    ElMessage.error(`播放失败: ${err.message || '未知错误'}`);
   }
 };
 
@@ -633,6 +765,26 @@ onActivated(() => {
     loadFavorites(activeTab.value);
   } else {
     console.log(`[FavoritesView][onActivated] 使用缓存数据，上次更新时间: ${new Date(parseInt(lastUpdate, 10)).toLocaleString()}`);
+  }
+  
+  // 如果当前是歌曲标签页，尝试清理URL缓存
+  if (currentTab === 'songs') {
+    // 检查上次清理时间
+    const lastCleanupKey = 'last_cleanup_favorite_songs_urls';
+    const lastCleanup = localStorage.getItem(lastCleanupKey);
+    const cleanupExpired = !lastCleanup || (now - parseInt(lastCleanup, 10)) > 24 * 60 * 60 * 1000; // 24小时
+    
+    if (cleanupExpired) {
+      console.log(`[FavoritesView] 开始清理收藏歌曲URL缓存`);
+      playerStore.cleanupFavoriteSongUrls().then(success => {
+        if (success) {
+          // 更新清理时间
+          localStorage.setItem(lastCleanupKey, now.toString());
+          // 重新加载歌曲列表
+          loadFavorites('songs');
+        }
+      });
+    }
   }
   
   // 恢复滚动位置

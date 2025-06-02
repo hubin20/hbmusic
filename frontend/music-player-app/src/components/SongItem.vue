@@ -97,7 +97,7 @@ const handleClickOutside = (event) => {
 };
 
 // 添加到收藏
-const addToFavorites = () => {
+const addToFavorites = async () => {
   if (isFavorited.value) {
     // 如果已收藏，则取消收藏
     const result = removeFromFavorites('SONGS', props.song.id);
@@ -108,21 +108,76 @@ const addToFavorites = () => {
       ElMessage.error('取消喜欢失败');
     }
   } else {
-    // 准备歌曲数据
+    // 准备歌曲数据，确保保存完整的歌曲信息
     const songData = {
+      ...props.song, // 保留原始歌曲对象的所有属性
       id: props.song.id,
       name: props.song.name,
       artist: props.song.artist,
       album: props.song.album,
-      picUrl: props.song.picUrl || props.song.al?.picUrl || '',
-      duration: props.song.duration || props.song.dt || 0
+      albumArt: props.song.albumArt || props.song.picUrl || props.song.al?.picUrl || '',
+      duration: props.song.duration || props.song.dt || 0,
+      // 保存URL相关信息
+      url: props.song.url || null,
+      directPlayUrl: props.song.directPlayUrl || null,
+      timestamp: props.song.timestamp || Date.now()
     };
     
-    // 添加到收藏
+    // 检查是否是酷我歌曲
+    const isKwSong = props.song.isFromKw === true || 
+      props.song.rid || 
+      (props.song.id && String(props.song.id).startsWith('kw_')) || 
+      (props.song.id && String(props.song.id).startsWith('kw-'));
+    
+    // 设置isFromKw标记
+    songData.isFromKw = isKwSong;
+    
+    // 如果是酷我歌曲，确保保存rid字段
+    if (isKwSong) {
+      songData.rid = props.song.rid || null;
+      console.log(`[SongItem] 收藏酷我歌曲: ${props.song.name}, ID: ${props.song.id}, isFromKw: true`);
+    } else {
+      // 非酷我歌曲，确保标记为false
+      songData.isFromKw = false;
+      console.log(`[SongItem] 收藏网易云歌曲: ${props.song.name}, ID: ${props.song.id}, isFromKw: false, URL: ${songData.url || 'null'}`);
+    }
+    
+    // 立即添加到收藏，不等待URL获取
     const result = addSongToFavorites('SONGS', songData);
     if (result) {
       isFavorited.value = true;
       ElMessage.success('已添加到我喜欢的音乐');
+      
+      // 如果是网易云歌曲且没有URL，在后台异步获取URL
+      if (!isKwSong && !songData.url) {
+        // 使用setTimeout将URL获取放到下一个事件循环，不阻塞UI
+        setTimeout(async () => {
+          try {
+            console.log(`[SongItem] 后台异步获取网易云歌曲URL: ${props.song.name}, ID: ${props.song.id}`);
+            const cleanId = String(props.song.id).replace(/^main_/, '');
+            
+            // 尝试从播放器获取URL
+            const songDetails = await playerStore._fetchSongUrlFromMainApi(cleanId);
+            
+            if (songDetails && songDetails.url) {
+              console.log(`[SongItem] 成功获取网易云歌曲URL: ${props.song.name}, URL: ${songDetails.url}`);
+              
+              // 更新收藏中的歌曲URL
+              try {
+                const { updateFavoriteSongUrl } = await import('../services/favoritesService');
+                updateFavoriteSongUrl(songData.id, songDetails.url, Date.now());
+                console.log(`[SongItem] 已更新收藏歌曲URL: ${props.song.name}`);
+              } catch (e) {
+                console.error(`[SongItem] 更新收藏歌曲URL失败: ${props.song.name}`, e);
+              }
+            } else {
+              console.log(`[SongItem] 无法获取网易云歌曲URL: ${props.song.name}`);
+            }
+          } catch (error) {
+            console.error(`[SongItem] 后台获取网易云歌曲URL失败: ${props.song.name}`, error);
+          }
+        }, 100);
+      }
     } else {
       ElMessage.error('添加失败');
     }
