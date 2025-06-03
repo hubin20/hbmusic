@@ -10,6 +10,7 @@ import App from './App.vue'
 import router from './router'
 import { usePlayerStore } from './stores/player'
 import { registerUserInteractionHandler } from './utils/navigationGuard'
+import { initMediaSessionHandler, watchPlayerChanges } from './utils/mediaSessionHandler'
 
 const app = createApp(App)
 
@@ -25,6 +26,10 @@ app.use(ElementPlus)
 
 const playerStore = usePlayerStore()
 playerStore.router = router
+
+// 初始化媒体会话处理程序
+const mediaControls = initMediaSessionHandler()
+watchPlayerChanges(playerStore, mediaControls)
 
 // 注册导航守卫的全局用户交互处理程序
 registerUserInteractionHandler()
@@ -56,6 +61,11 @@ document.addEventListener('visibilitychange', () => {
                   { src: playerStore.currentSong.albumArt, sizes: '512x512', type: 'image/jpeg' }
                 ]
               });
+            }
+
+            // 更新Android通知
+            if (mediaControls) {
+              mediaControls.updateNowPlaying();
             }
 
             // 然后尝试播放
@@ -111,6 +121,12 @@ function checkAndUpdateAndroidService() {
             playerStore.currentSong.name || '未知歌曲',
             playerStore.currentSong.artist || '未知艺术家'
           );
+
+          // 更新播放状态
+          if (typeof window.AndroidPlayer.setPlayingState === 'function') {
+            window.AndroidPlayer.setPlayingState(playerStore.isPlaying);
+          }
+
           console.log('[main.js] 已更新Android通知信息');
         }
       }
@@ -185,6 +201,11 @@ if ('serviceWorker' in navigator) {
 if (app.config.globalProperties.$pinia) {
   playerStore.restoreSavedState().then(() => {
     console.log('应用启动时已恢复保存的状态');
+
+    // 初始化媒体会话信息
+    if (playerStore.currentSong) {
+      mediaControls.updateNowPlaying();
+    }
   }).catch(err => {
     console.error('恢复状态时出错:', err);
   });
