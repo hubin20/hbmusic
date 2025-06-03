@@ -488,25 +488,25 @@ watch(() => router.currentRoute.value.path, (newPath, oldPath) => {
         // 如果之前是播放状态，确保继续播放
         if (musicWasPlaying) {
           console.log('[PlayerControls] 从MV页面返回，恢复之前的播放状态为播放');
-          
-          // 设置播放状态为true
+        
+        // 设置播放状态为true
           playerStore.isPlaying = true;
-          
-          // 确保音频播放
-          if (audioPlayer.value.paused) {
-            console.log('[PlayerControls] 尝试恢复音频播放');
-            audioPlayer.value.play().catch(err => {
-              console.warn('[PlayerControls] 自动恢复播放失败:', err);
-              window._needManualPlayResume = true;
-              
-              // 再次尝试播放
-              setTimeout(() => {
-                console.log('[PlayerControls] 再次尝试恢复播放');
-                audioPlayer.value.play().catch(() => {
-                  console.warn('[PlayerControls] 二次尝试播放失败，需要用户交互');
-                });
-              }, 1000);
-            });
+        
+        // 确保音频播放
+        if (audioPlayer.value.paused) {
+          console.log('[PlayerControls] 尝试恢复音频播放');
+          audioPlayer.value.play().catch(err => {
+            console.warn('[PlayerControls] 自动恢复播放失败:', err);
+            window._needManualPlayResume = true;
+            
+            // 再次尝试播放
+            setTimeout(() => {
+              console.log('[PlayerControls] 再次尝试恢复播放');
+              audioPlayer.value.play().catch(() => {
+                console.warn('[PlayerControls] 二次尝试播放失败，需要用户交互');
+              });
+            }, 1000);
+          });
           } else {
             console.log('[PlayerControls] 音频已经在播放中，无需恢复');
           }

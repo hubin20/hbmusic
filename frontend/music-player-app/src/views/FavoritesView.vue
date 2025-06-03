@@ -446,7 +446,10 @@ const playSong = (song, index) => {
     // 这样可以确保播放列表中的所有歌曲都有正确的属性
     playerStore.resetSearchState();
     
-    // 直接播放歌曲，不进行额外的检查和重试
+    // 设置播放列表为收藏列表，完全替换当前播放列表
+    playerStore.setPlaylist(enhancedSongs, true);
+    
+    // 播放选中的歌曲
     playerStore.playSong(enhancedSongs[correctIndex], correctIndex);
     
     // 移除额外的播放检查和重试逻辑，避免多次调用播放API
@@ -633,10 +636,60 @@ const formatPlayCount = (count) => {
 // 播放全部歌曲
 const playAllFavorites = () => {
   if (favoriteSongs.value.length > 0) {
-    playerStore.playSong(favoriteSongs.value[0], {
-      index: 0,
-      fullQueue: favoriteSongs.value
-    });
+    try {
+      console.log(`[FavoritesView] 播放全部收藏歌曲，共${favoriteSongs.value.length}首`);
+      
+      // 获取当前完整的收藏歌曲列表
+      const allFavoriteSongs = getFavorites('SONGS');
+      
+      // 确保歌曲对象中的关键属性正确
+      const enhancedSongs = allFavoriteSongs.map((favSong) => {
+        // 创建歌曲副本，避免修改原对象
+        const enhancedSong = { ...favSong };
+        
+        // 确保ID是字符串类型
+        enhancedSong.id = String(enhancedSong.id);
+        
+        // 检查是否是酷我歌曲
+        const isKwSong = enhancedSong.isFromKw || 
+            enhancedSong.rid || 
+            (typeof enhancedSong.id === 'string' && 
+             (enhancedSong.id.startsWith('kw_') || enhancedSong.id.startsWith('kw-')));
+        
+        // 对于所有收藏歌曲，始终强制刷新URL
+        if (isKwSong) {
+          // 确保isFromKw标记正确设置
+          enhancedSong.isFromKw = true;
+          // 强制刷新URL并清除旧URL
+          enhancedSong.forceRefreshUrl = true;
+          enhancedSong.url = null;
+          enhancedSong.timestamp = null;
+        } else {
+          // 网易云歌曲
+          enhancedSong.isFromKw = false;
+          // 对于网易云收藏歌曲，也强制刷新URL
+          enhancedSong.forceRefreshUrl = true;
+          enhancedSong.url = null;
+          enhancedSong.timestamp = null;
+        }
+        
+        return enhancedSong;
+      });
+      
+      // 重置搜索状态
+      playerStore.resetSearchState();
+      
+      // 设置播放列表为收藏列表，完全替换当前播放列表
+      playerStore.setPlaylist(enhancedSongs, true);
+      
+      // 播放第一首歌曲
+      if (enhancedSongs.length > 0) {
+        playerStore.playSong(enhancedSongs[0], 0);
+      }
+    } catch (error) {
+      console.error(`[FavoritesView] 播放全部歌曲出错: ${error.message}`);
+      ElMessage.error(`播放失败: ${error.message || '未知错误'}`);
+    }
   }
 };
 

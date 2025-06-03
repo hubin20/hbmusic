@@ -256,9 +256,12 @@ export const getKwPlaylists = async (name = '精选', page = 1, limit = 30) => {
  */
 export const getKwPlaylistDetail = async (id, page = 1, limit = 30) => {
   try {
-    // 处理带有"kw-"前缀的ID
-    const realId = id.toString().startsWith('kw-') ? id.toString().substring(3) : id;
+    // 处理带有"kw-"或"kw_"前缀的ID
+    const idStr = id.toString();
+    const realId = idStr.startsWith('kw-') ? idStr.substring(3) :
+      idStr.startsWith('kw_') ? idStr.substring(3) : id;
 
+    console.log(`[API] 获取酷我歌单详情, 原始ID: ${id}, 处理后ID: ${realId}`);
     const response = await axios.get(`${KW_API_URL}`, {
       params: { id: realId, page, limit, type: 'list' }
     });

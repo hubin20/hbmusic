@@ -160,24 +160,40 @@ export const afterSpecialNavigation = (to, from, playerStore) => {
 
     // 多层保障，延迟检查播放状态
     setTimeout(() => {
+      // 检查之前的播放状态
+      const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
+      console.log('[NavigationGuard] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
+
       // 如果有备份状态，尝试恢复
       if (hasBackupState()) {
         restorePlayerState(playerStore);
-      } else if (playerStore.currentSong && playerStore.isPlaying) {
-        // 如果没有备份但有当前歌曲，确保播放正常
-        const audio = document.querySelector('audio');
-        if (audio && audio.paused) {
-          console.log('[NavigationGuard] 确保音频继续播放');
-          audio.play().catch(() => {
-            window._needManualPlayResume = true;
-          });
+      } else if (playerStore.currentSong) {
+        // 如果没有备份但有当前歌曲，根据之前的播放状态决定是否恢复播放
+        if (musicWasPlaying) {
+          playerStore.isPlaying = true;
+          const audio = document.querySelector('audio');
+          if (audio && audio.paused) {
+            console.log('[NavigationGuard] 根据原始状态恢复音频播放');
+            audio.play().catch(() => {
+              window._needManualPlayResume = true;
+            });
+          }
+        } else {
+          // 如果之前是暂停状态，确保保持暂停
+          playerStore.isPlaying = false;
+          const audio = document.querySelector('audio');
+          if (audio && !audio.paused) {
+            console.log('[NavigationGuard] 根据原始状态确保音频暂停');
+            audio.pause();
+          }
         }
       }
 
-      // 清除导航标记
+      // 清除导航标记和播放状态记录
       window._fromMVToPlaylist = false;
       window._preventDataReload = false;
       window._navigationSource = null;
+      localStorage.removeItem('musicWasPlaying');
     }, 300);
   }
 };

@@ -394,9 +394,9 @@ const handleKwPlaylistResponse = async (kwResponse, playlistId) => {
 
   if (Array.isArray(kwData.musicList)) {
     const songPromises = kwData.musicList.map(async (songStub, index) => {
-      // 确保歌曲ID格式一致
-      const songId = `kw-${songStub.rid || songStub.id || index}`;
+      // 确保歌曲ID格式一致，使用kw_前缀而不是kw-
       const kwRid = songStub.rid || songStub.id;
+      const songId = `kw_${kwRid || index}`;
       let songDurationMs = 0;
       let picUrl = convertHttpToHttps(songStub.pic || defaultCoverUrl);
       let artistName = songStub.artist || '未知歌手';
@@ -484,7 +484,7 @@ const handleKwRankingResponse = async (kwResponse, playlistId, rankName) => {
     const songPromises = musicList.map(async (songStub, index) => {
       // 确保歌曲ID格式一致
       const kwRid = songStub.rid || songStub.id;
-      const songId = `kw-${kwRid || index}`;
+      const songId = `kw_${kwRid || index}`;
       
       // 提取歌曲信息
       let songDurationMs = 0;
@@ -561,7 +561,7 @@ const handleKwRankingResponse = async (kwResponse, playlistId, rankName) => {
           
           const songPromises = directMusicList.map(async (songStub, index) => {
             const kwRid = songStub.rid || songStub.id;
-            const songId = `kw-${kwRid || index}`;
+            const songId = `kw_${kwRid || index}`;
             
             let songDurationMs = 0;
             if (songStub.interval) {
@@ -694,17 +694,42 @@ const formatDuration = (ms) => {
  */
 const playAllSongs = () => {
   if (playlistSongs.value.length > 0) {
-    const queue = playlistSongs.value.map(song => ({
+    const queue = playlistSongs.value.map(song => {
+      // 检查是否是酷我歌曲
+      const isFromKw = song.isFromKw || song.source === 'kw' || 
+                      (song.id && String(song.id).startsWith('kw')) ||
+                      song.rid || song.kwRid;
+      
+      // 提取酷我RID
+      let kwRid = null;
+      if (isFromKw) {
+        kwRid = song.rid || song.kwRid;
+        
+        // 如果没有直接的RID但有ID，尝试从ID中提取
+        if (!kwRid && song.id) {
+          const idStr = String(song.id);
+          if (idStr.startsWith('kw_')) {
+            kwRid = idStr.substring(3);
+          } else if (idStr.startsWith('kw-')) {
+            kwRid = idStr.substring(3);
+          }
+        }
+      }
+      
+      return {
       id: song.id,
       name: song.name,
       artist: song.ar?.map(a => a.name).join(', ') || '未知歌手',
       albumArt: song.al?.picUrl || defaultCoverUrl,
       duration: song.dt || 0, // 确保使用dt
       album: song.al?.name || '未知专辑',
-      isFromKw: song.isFromKw || song.source === 'kw',
-      kwRid: song.kwRid || song.rid,
-      source: song.source || (song.isFromKw ? 'kw' : 'main'),
-    }));
+        isFromKw: isFromKw,
+        kwRid: kwRid,
+        rid: kwRid,
+        source: song.source || (isFromKw ? 'kw' : 'main'),
+        forceRefreshUrl: isFromKw // 酷我歌曲强制刷新URL
+      };
+    });
     
     // 清除可能的搜索结果缓存
     playerStore.resetSearchState();
@@ -735,17 +760,68 @@ const playSong = (song, index) => {
       return;
     }
     
+    // 检查是否是酷我歌曲
+    const isFromKw = song.isFromKw || song.source === 'kw' || 
+                    (song.id && String(song.id).startsWith('kw')) ||
+                    song.rid || song.kwRid;
+    
+    // 提取酷我RID
+    let kwRid = null;
+    if (isFromKw) {
+      kwRid = song.rid || song.kwRid;
+      
+      // 如果没有直接的RID但有ID，尝试从ID中提取
+      if (!kwRid && song.id) {
+        const idStr = String(song.id);
+        if (idStr.startsWith('kw_')) {
+          kwRid = idStr.substring(3);
+        } else if (idStr.startsWith('kw-')) {
+          kwRid = idStr.substring(3);
+        }
+      }
+    }
+    
     // 确保歌曲ID是字符串类型
     const songToPlay = {
       ...song,
-      id: String(song.id)
+      id: String(song.id),
+      isFromKw: isFromKw,
+      kwRid: kwRid,
+      rid: kwRid,
+      source: song.source || (isFromKw ? 'kw' : 'main'),
+      forceRefreshUrl: isFromKw // 酷我歌曲强制刷新URL
     };
     
-    // 构建完整的歌曲队列
-    const fullQueue = playlistSongs.value.map(s => ({
+    // 构建完整的歌曲队列，同样处理每首歌曲
+    const fullQueue = playlistSongs.value.map(s => {
+      const sIsFromKw = s.isFromKw || s.source === 'kw' || 
+                       (s.id && String(s.id).startsWith('kw')) ||
+                       s.rid || s.kwRid;
+      
+      let sKwRid = null;
+      if (sIsFromKw) {
+        sKwRid = s.rid || s.kwRid;
+        
+        if (!sKwRid && s.id) {
+          const idStr = String(s.id);
+          if (idStr.startsWith('kw_')) {
+            sKwRid = idStr.substring(3);
+          } else if (idStr.startsWith('kw-')) {
+            sKwRid = idStr.substring(3);
+          }
+        }
+      }
+      
+      return {
       ...s,
-      id: String(s.id) // 确保队列中所有歌曲ID都是字符串
-    }));
+        id: String(s.id),
+        isFromKw: sIsFromKw,
+        kwRid: sKwRid,
+        rid: sKwRid,
+        source: s.source || (sIsFromKw ? 'kw' : 'main'),
+        forceRefreshUrl: sIsFromKw
+      };
+    });
     
     if (!fullQueue || fullQueue.length === 0) {
       console.error('[PlaylistDetailView] 无法构建播放队列');
@@ -772,22 +848,6 @@ const playSong = (song, index) => {
       
       // 然后播放选中的歌曲
       playerStore.playSong(songToPlay, index, playlistDetail.value?.id);
-      
-      // 确保播放状态更新
-      setTimeout(() => {
-        if (!playerStore.isPlaying) {
-          console.log('[PlaylistDetailView] 播放状态未更新，尝试强制播放');
-          playerStore.isPlaying = true;
-          
-          // 获取音频元素并尝试播放
-          const audioElement = document.getElementById('audio-player');
-          if (audioElement) {
-            audioElement.play().catch(err => {
-              console.error('[PlaylistDetailView] 强制播放失败:', err);
-            });
-          }
-        }
-      }, 500);
     });
   } catch (error) {
     console.error('[PlaylistDetailView] 播放歌曲时出错:', error);
@@ -1174,10 +1234,16 @@ watch(() => route.fullPath, (newPath, oldPath) => {
     const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
     console.log('[PlaylistDetailView] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
     
-    // 强制恢复播放，无论之前状态如何
+    // 检查当前实际播放状态
+    const isCurrentlyPlaying = playerStore.isPlaying;
+    console.log('[PlaylistDetailView] 从MV页面返回，当前实际播放状态:', isCurrentlyPlaying ? '播放中' : '暂停');
+    
+    // 只有在之前音乐正在播放的情况下才恢复播放
     if (playerStore.currentSong) {
-      console.log('[PlaylistDetailView] 从MV返回，强制恢复音乐播放');
       setTimeout(() => {
+        // 如果之前是播放状态或当前已经在播放，确保继续播放
+        if (musicWasPlaying || isCurrentlyPlaying) {
+          console.log('[PlaylistDetailView] 从MV返回，恢复之前的播放状态');
         // 设置播放状态
         playerStore.isPlaying = true;
         
@@ -1197,6 +1263,18 @@ watch(() => route.fullPath, (newPath, oldPath) => {
               });
             }, 1000);
           });
+          }
+        } else {
+          console.log('[PlaylistDetailView] 从MV返回，保持暂停状态');
+          // 确保播放器状态为暂停
+          if (playerStore.isPlaying) {
+            playerStore.isPlaying = false;
+          }
+          // 确保音频也是暂停的
+          const audioElement = document.getElementById('audio-player');
+          if (audioElement && !audioElement.paused) {
+            audioElement.pause();
+          }
         }
       }, 300);
     }

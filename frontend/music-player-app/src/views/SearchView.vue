@@ -293,7 +293,7 @@ const performSearch = async (query, isLoadMore = false) => {
         // 使用playerStore的searchSongs方法，而不是直接调用API
         // 保存搜索关键词
         playerStore.lastSearchKeyword = query;
-
+        
         if (isLoadMore) {
           // 加载更多使用loadMoreSongs方法
           console.log(`[SearchView] 加载更多搜索结果，关键词: ${query}, 偏移量: ${offset.value}`);
