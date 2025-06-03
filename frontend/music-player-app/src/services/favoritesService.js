@@ -214,68 +214,63 @@ export const getFavoritesCount = (type) => {
 /**
  * 更新收藏歌曲的URL
  * @param {string} songId - 歌曲ID
- * @param {string} newUrl - 新的URL
- * @param {number} timestamp - 时间戳，如果不提供则使用当前时间
- * @param {object} additionalInfo - 额外需要更新的信息
- * @returns {boolean} - 是否成功更新
+ * @param {string} url - 新的URL
+ * @param {number} timestamp - 时间戳
+ * @param {object} additionalProps - 额外需要更新的属性
+ * @returns {boolean} - 是否更新成功
  */
-export const updateFavoriteSongUrl = (songId, newUrl, timestamp = null, additionalInfo = {}) => {
-  if (!songId || !newUrl) {
-    console.error('[FavoritesService] 更新收藏歌曲URL失败: 无效的参数');
-    return false;
-  }
-
+export function updateFavoriteSongUrl(songId, url, timestamp, additionalProps = {}) {
   try {
-    // 获取收藏歌曲列表
-    const songs = getFavorites('SONGS');
+    console.log(`[FavoritesService] 更新歌曲URL: ${songId}`);
 
-    // 查找对应ID的歌曲
-    const songIndex = songs.findIndex(s => String(s.id) === String(songId));
+    // 获取收藏歌曲列表
+    const favorites = getFavorites('SONGS');
+
+    // 查找歌曲
+    const songIndex = favorites.findIndex(s => String(s.id) === String(songId));
 
     if (songIndex === -1) {
-      console.error(`[FavoritesService] 更新收藏歌曲URL失败: 未找到ID为 ${songId} 的歌曲`);
+      console.error(`[FavoritesService] 未找到ID为 ${songId} 的收藏歌曲`);
       return false;
     }
 
-    // 更新URL和时间戳
-    songs[songIndex].url = newUrl;
-    songs[songIndex].timestamp = timestamp || Date.now();
+    // 更新歌曲URL和时间戳
+    const updatedSong = { ...favorites[songIndex] };
 
-    // 更新其他可能的字段
-    if (additionalInfo.directPlayUrl) {
-      songs[songIndex].directPlayUrl = additionalInfo.directPlayUrl;
+    // 只有当提供了有效URL时才更新
+    if (url && url !== 'undefined' && url !== 'null') {
+      updatedSong.url = url;
     }
 
-    if (additionalInfo.isFallbackDirect !== undefined) {
-      songs[songIndex].isFallbackDirect = additionalInfo.isFallbackDirect;
+    // 更新时间戳
+    if (timestamp) {
+      updatedSong.timestamp = timestamp;
+    } else {
+      updatedSong.timestamp = Date.now();
     }
 
-    if (additionalInfo.rid) {
-      songs[songIndex].rid = additionalInfo.rid;
+    // 更新额外的属性
+    if (additionalProps) {
+      Object.keys(additionalProps).forEach(key => {
+        if (additionalProps[key] !== undefined) {
+          updatedSong[key] = additionalProps[key];
+        }
+      });
     }
 
-    // 确保isFromKw标记正确
-    if (additionalInfo.isFromKw !== undefined) {
-      songs[songIndex].isFromKw = additionalInfo.isFromKw;
-    } else if (songs[songIndex].rid ||
-      (typeof songs[songIndex].id === 'string' &&
-        (songs[songIndex].id.startsWith('kw_') || songs[songIndex].id.startsWith('kw-')))) {
-      songs[songIndex].isFromKw = true;
-    }
+    // 更新收藏列表
+    favorites[songIndex] = updatedSong;
 
-    // 重置强制刷新标记
-    songs[songIndex].forceRefreshUrl = false;
+    // 保存更新后的收藏列表
+    localStorage.setItem('favorites_songs', JSON.stringify(favorites));
 
-    // 保存回本地存储
-    localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(songs));
-
-    console.log(`[FavoritesService] 成功更新歌曲 ${songs[songIndex].name} (ID: ${songId}) 的URL`);
+    console.log(`[FavoritesService] 成功更新歌曲 ${updatedSong.name} (ID: ${songId}) 的URL`);
     return true;
-  } catch (err) {
-    console.error('[FavoritesService] 更新收藏歌曲URL时出错:', err);
+  } catch (error) {
+    console.error(`[FavoritesService] 更新歌曲URL失败:`, error);
     return false;
   }
-};
+}
 
 /**
  * 批量更新收藏歌曲的信息
@@ -366,22 +361,17 @@ export const fixNeteaseFavoriteSongs = () => {
         !(song.source === 'kw') &&
         !(song.originalData && song.originalData.source === 'kw');
 
-      // 如果是网易云歌曲，检查URL
+      // 如果是网易云歌曲，始终清除URL强制刷新
       if (isNeteaseSong) {
-        const isUrlExpired = song.timestamp && (Date.now() - song.timestamp > 7 * 24 * 60 * 60 * 1000);
-        const isUrlInvalid = !song.url || song.url.includes('null');
-
-        if (isUrlExpired || isUrlInvalid) {
-          updated = true;
-          console.log(`[FavoritesService] 修复网易云歌曲URL: ${song.name}, ID: ${song.id}`);
-          return {
-            ...song,
-            url: null,
-            directPlayUrl: null,
-            forceRefreshUrl: true,
-            timestamp: null
-          };
-        }
+        updated = true;
+        console.log(`[FavoritesService] 修复网易云歌曲URL: ${song.name}, ID: ${song.id}`);
+        return {
+          ...song,
+          url: null,
+          directPlayUrl: null,
+          forceRefreshUrl: true,
+          timestamp: null
+        };
       }
 
       return song;
