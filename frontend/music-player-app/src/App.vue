@@ -758,7 +758,7 @@ watch(() => route.fullPath, (newPath, oldPath) => {
     window._fromMVToPlaylist = true;
     window._preventDataReload = true;
     
-    // 清除所有MV相关状态标记
+    // 清除部分MV相关状态标记，但保留musicWasPlaying以便恢复播放状态
     localStorage.removeItem('musicPausedForMV');
     localStorage.removeItem('isFromMV');
     sessionStorage.removeItem('mv_return_playstate');
@@ -771,68 +771,81 @@ watch(() => route.fullPath, (newPath, oldPath) => {
         const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
         console.log('[App.vue] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
         
-        if (musicWasPlaying) {
-          // 如果之前是播放状态，确保恢复播放
-          if (!playerStore.isPlaying) {
-            console.log('[App.vue] 设置播放状态为true');
-            playerStore.isPlaying = true;
-          }
+        // 检查当前实际播放状态
+        const isCurrentlyPlaying = playerStore.isPlaying;
+        console.log('[App.vue] 从MV页面返回，当前实际播放状态:', isCurrentlyPlaying ? '播放中' : '暂停');
+        
+        // 先确保当前音乐是暂停的，避免状态冲突
+        if (isCurrentlyPlaying) {
+          console.log('[App.vue] 先暂停当前播放，防止状态冲突');
+          playerStore.isPlaying = false;
           
-          // 确保音频播放
-          const audio = document.querySelector('audio');
-          if (audio && audio.paused) {
-            console.log('[App.vue] 尝试恢复音频播放');
-            try {
-              const playPromise = audio.play();
-              if (playPromise !== undefined) {
-                playPromise.catch(err => {
-                  console.warn('[App.vue] 自动恢复播放失败:', err);
-                  window._needManualPlayResume = true;
-                  
-                  // 再次尝试播放
-                  setTimeout(() => {
-                    console.log('[App.vue] 再次尝试恢复播放');
-                    audio.play().catch(() => {
-                      console.warn('[App.vue] 二次尝试播放失败，需要用户交互');
-                    });
-                  }, 1000);
-                });
-              }
-            } catch (err) {
-              console.warn('[App.vue] 播放尝试出错:', err);
-            }
-          }
-        } else {
-          // 如果之前是暂停状态，确保保持暂停
-          if (playerStore.isPlaying) {
-            console.log('[App.vue] 设置播放状态为false');
-            playerStore.isPlaying = false;
-          }
-          
-          // 确保音频暂停
+          // 直接暂停音频元素
           const audio = document.querySelector('audio');
           if (audio && !audio.paused) {
-            console.log('[App.vue] 确保音频保持暂停');
             audio.pause();
           }
         }
         
-        // 清除记录
+        // 延迟一点时间后根据之前的状态决定是否恢复播放
+        setTimeout(() => {
+          // 如果之前是播放状态，确保继续播放
+          if (musicWasPlaying) {
+            console.log('[App.vue] 恢复之前的播放状态为播放');
+            
+            // 设置播放状态为true
+            playerStore.isPlaying = true;
+            
+            // 确保音频播放
+            const audio = document.querySelector('audio');
+            if (audio && audio.paused) {
+              console.log('[App.vue] 尝试恢复音频播放');
+              try {
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {
+                  playPromise.catch(err => {
+                    console.warn('[App.vue] 自动恢复播放失败:', err);
+                    window._needManualPlayResume = true;
+                    
+                    // 再次尝试播放
+                    setTimeout(() => {
+                      console.log('[App.vue] 再次尝试恢复播放');
+                      audio.play().catch(() => {
+                        console.warn('[App.vue] 二次尝试播放失败，需要用户交互');
+                      });
+                    }, 1000);
+                  });
+                }
+              } catch (err) {
+                console.warn('[App.vue] 播放尝试出错:', err);
+              }
+            } else if (audio) {
+              console.log('[App.vue] 音频已在播放中，无需恢复');
+            } else {
+              console.warn('[App.vue] 未找到音频元素');
+            }
+          } else {
+            console.log('[App.vue] 保持暂停状态');
+            // 确保播放器状态为暂停
+            if (playerStore.isPlaying) {
+              playerStore.isPlaying = false;
+            }
+            
+            // 确保音频暂停
+            const audio = document.querySelector('audio');
+            if (audio && !audio.paused) {
+              console.log('[App.vue] 确保音频保持暂停');
+              audio.pause();
+            }
+          }
+          
+          // 清除记录
+          localStorage.removeItem('musicWasPlaying');
+        }, 100);
+      } else {
+        console.log('[App.vue] 没有当前歌曲，无需恢复播放状态');
         localStorage.removeItem('musicWasPlaying');
       }
-      
-      // 300ms后再次检查，以防播放状态未正确恢复
-      setTimeout(() => {
-        if (playerStore.currentSong && playerStore.isPlaying) {
-          const audio = document.querySelector('audio');
-          if (audio && audio.paused) {
-            console.log('[App.vue] 二次尝试恢复音频播放');
-            audio.play().catch(() => {
-              window._needManualPlayResume = true;
-            });
-          }
-        }
-      }, 500);
     }, 300); // 等待播放器组件挂载完成
   }
   // 添加对从歌词页面返回的处理

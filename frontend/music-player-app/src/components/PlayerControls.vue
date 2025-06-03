@@ -457,7 +457,7 @@ watch(() => router.currentRoute.value.path, (newPath, oldPath) => {
   if (isFromMV || window._fromMVToPlaylist) {
     console.log('[PlayerControls] 检测到从MV页面返回播放页面');
     
-    // 清除所有MV相关状态标记
+    // 清除部分MV相关状态标记，但保留musicWasPlaying以便恢复播放状态
     localStorage.removeItem('musicPausedForMV');
     localStorage.removeItem('isFromMV');
     sessionStorage.removeItem('mv_return_playstate');
@@ -467,39 +467,67 @@ watch(() => router.currentRoute.value.path, (newPath, oldPath) => {
     const musicWasPlaying = localStorage.getItem('musicWasPlaying') === 'true';
     console.log('[PlayerControls] 从MV页面返回，检测到原始播放状态:', musicWasPlaying ? '播放中' : '暂停');
     
+    // 检查当前实际播放状态
+    const isCurrentlyPlaying = playerStore.isPlaying;
+    console.log('[PlayerControls] 从MV页面返回，当前实际播放状态:', isCurrentlyPlaying ? '播放中' : '暂停');
+    
     // 确保音频状态与播放器状态一致
     if (playerStore.currentSong && audioPlayer.value) {
+      // 先确保当前音乐是暂停的，避免状态冲突
+      if (isCurrentlyPlaying) {
+        console.log('[PlayerControls] 先暂停当前播放，防止状态冲突');
+        playerStore.isPlaying = false;
+        
+        if (!audioPlayer.value.paused) {
+          audioPlayer.value.pause();
+        }
+      }
+      
       // 延迟执行，确保DOM已更新
       setTimeout(() => {
-        // 强制恢复播放 - 无论之前状态如何
-        console.log('[PlayerControls] 从MV页面返回，强制恢复播放');
-        
-        // 设置播放状态为true
-        if (!playerStore.isPlaying) {
-          console.log('[PlayerControls] 设置播放状态为true');
+        // 如果之前是播放状态，确保继续播放
+        if (musicWasPlaying) {
+          console.log('[PlayerControls] 从MV页面返回，恢复之前的播放状态为播放');
+          
+          // 设置播放状态为true
           playerStore.isPlaying = true;
-        }
-        
-        // 确保音频播放
-        if (audioPlayer.value.paused) {
-          console.log('[PlayerControls] 尝试恢复音频播放');
-          audioPlayer.value.play().catch(err => {
-            console.warn('[PlayerControls] 自动恢复播放失败:', err);
-            window._needManualPlayResume = true;
-            
-            // 再次尝试播放
-            setTimeout(() => {
-              console.log('[PlayerControls] 再次尝试恢复播放');
-              audioPlayer.value.play().catch(() => {
-                console.warn('[PlayerControls] 二次尝试播放失败，需要用户交互');
-              });
-            }, 1000);
-          });
+          
+          // 确保音频播放
+          if (audioPlayer.value.paused) {
+            console.log('[PlayerControls] 尝试恢复音频播放');
+            audioPlayer.value.play().catch(err => {
+              console.warn('[PlayerControls] 自动恢复播放失败:', err);
+              window._needManualPlayResume = true;
+              
+              // 再次尝试播放
+              setTimeout(() => {
+                console.log('[PlayerControls] 再次尝试恢复播放');
+                audioPlayer.value.play().catch(() => {
+                  console.warn('[PlayerControls] 二次尝试播放失败，需要用户交互');
+                });
+              }, 1000);
+            });
+          } else {
+            console.log('[PlayerControls] 音频已经在播放中，无需恢复');
+          }
+        } else {
+          console.log('[PlayerControls] 从MV页面返回，保持暂停状态');
+          // 确保播放器状态为暂停
+          if (playerStore.isPlaying) {
+            playerStore.isPlaying = false;
+          }
+          // 确保音频也是暂停的
+          if (!audioPlayer.value.paused) {
+            audioPlayer.value.pause();
+          }
         }
         
         // 清除记录
         localStorage.removeItem('musicWasPlaying');
       }, 300);
+    } else if (!playerStore.currentSong) {
+      console.log('[PlayerControls] 没有当前歌曲，无需恢复播放状态');
+      localStorage.removeItem('musicWasPlaying');
     }
     
     // 清除窗口变量，防止状态错误传递

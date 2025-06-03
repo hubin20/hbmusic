@@ -524,27 +524,34 @@ const goBack = () => {
     
     console.log('[MVView] 返回操作，之前音乐播放状态:', musicWasPlaying);
     
-    // 强制恢复播放状态 - 无论之前状态如何，都尝试恢复播放
-    console.log('[MVView] 返回操作，强制恢复播放状态');
+    // 检查当前实际播放状态
+    const isCurrentlyPlaying = playerStore.isPlaying;
+    console.log('[MVView] 返回操作，当前实际播放状态:', isCurrentlyPlaying);
     
-    // 设置延迟，确保路由切换完成后再恢复播放
-    setTimeout(() => {
-      playerStore.isPlaying = true;
-      // 确保音频元素也在播放
+    // 重要：确保在返回前不会错误地恢复播放状态
+    // 先暂停当前可能正在播放的音乐，确保不会在返回时自动开始播放
+    if (isCurrentlyPlaying) {
+      console.log('[MVView] 返回前暂停当前播放，防止状态冲突');
+      playerStore.isPlaying = false;
+      
+      // 直接暂停音频元素
       const audioElement = document.getElementById('audio-player');
-      if (audioElement && audioElement.paused) {
-        audioElement.play().catch(err => {
-          console.warn('[MVView] 返回时恢复播放失败:', err);
-          // 标记需要用户交互来恢复播放
-          window._needManualPlayResume = true;
-        });
+      if (audioElement && !audioElement.paused) {
+        audioElement.pause();
       }
-    }, 300);
+    }
+    
+    // 确保musicWasPlaying的值是正确的
+    // 如果之前是播放状态，在返回时会由其他组件(App.vue或PlayerControls.vue)恢复播放
+    // 这里不要直接恢复播放，避免多处恢复导致的冲突
+  } else {
+    // 如果没有当前歌曲，确保musicWasPlaying为false
+    localStorage.setItem('musicWasPlaying', 'false');
   }
   
   // 清除所有MV相关状态标记
+  // 注意：不要在这里清除musicWasPlaying，让App.vue或PlayerControls.vue处理
   localStorage.removeItem('musicPausedForMV');
-  localStorage.removeItem('musicWasPlaying');
   localStorage.removeItem('isFromMV');
   sessionStorage.removeItem('mv_return_playstate');
   sessionStorage.removeItem('mv_return_timestamp');
@@ -690,6 +697,46 @@ onMounted(() => {
   // 检查是否是酷我MV
   isKwMV.value = route.query.source === 'kw';
   
+  // 记录当前音乐播放状态，无论是否在播放
+  if (playerStore.currentSong) {
+    // 检查是否已经记录了播放状态，如果已记录则不再覆盖
+    if (localStorage.getItem('musicWasPlaying') === null) {
+      const isCurrentlyPlaying = playerStore.isPlaying;
+      localStorage.setItem('musicWasPlaying', isCurrentlyPlaying ? 'true' : 'false');
+      console.log(`[MVView][onMounted] 进入MV页面，记录当前音乐播放状态: ${isCurrentlyPlaying ? '播放中' : '已暂停'}`);
+      
+      // 如果当前正在播放音乐，暂停它
+      if (isCurrentlyPlaying) {
+        console.log('[MVView][onMounted] 暂停当前播放的音乐');
+        // 直接暂停音频元素，确保立即生效
+        const audioElement = document.getElementById('audio-player');
+        if (audioElement && !audioElement.paused) {
+          audioElement.pause();
+        }
+        // 更新播放器状态
+        playerStore.isPlaying = false;
+        localStorage.setItem('musicPausedForMV', 'true');
+      }
+    } else {
+      console.log(`[MVView][onMounted] 播放状态已记录，不再覆盖`);
+      
+      // 即使已经记录了状态，也要确保音乐已暂停
+      if (playerStore.isPlaying) {
+        console.log('[MVView][onMounted] 确保音乐已暂停');
+        // 直接暂停音频元素
+        const audioElement = document.getElementById('audio-player');
+        if (audioElement && !audioElement.paused) {
+          audioElement.pause();
+        }
+        // 更新播放器状态
+        playerStore.isPlaying = false;
+      }
+    }
+  } else {
+    // 如果没有当前歌曲，也记录为false
+    localStorage.setItem('musicWasPlaying', 'false');
+  }
+  
   // 检查是否有缓存数据
   const cacheKey = isKwMV.value ? `kw_${mvId}` : mvId;
   if (mvId && mvCache.value[cacheKey]) {
@@ -782,19 +829,38 @@ watch(() => route.params.id, (newId, oldId) => {
     error.value = null;
     
     // 记录当前音乐播放状态，无论是否在播放
-    if (playerStore.currentSong) {
+    if (playerStore.currentSong && localStorage.getItem('musicWasPlaying') === null) {
       const isCurrentlyPlaying = playerStore.isPlaying;
       localStorage.setItem('musicWasPlaying', isCurrentlyPlaying ? 'true' : 'false');
       console.log(`[MVView] 进入MV页面，记录当前音乐播放状态: ${isCurrentlyPlaying ? '播放中' : '已暂停'}`);
       
       // 如果当前正在播放音乐，暂停它
       if (isCurrentlyPlaying) {
-        playerStore.togglePlayPause();
+        console.log('[MVView] 路由参数变化，暂停当前播放的音乐');
+        // 直接暂停音频元素，确保立即生效
+        const audioElement = document.getElementById('audio-player');
+        if (audioElement && !audioElement.paused) {
+          audioElement.pause();
+        }
+        // 更新播放器状态
+        playerStore.isPlaying = false;
         localStorage.setItem('musicPausedForMV', 'true');
       }
-    } else {
+    } else if (!playerStore.currentSong) {
       // 如果没有当前歌曲，也记录为false
       localStorage.setItem('musicWasPlaying', 'false');
+    } else {
+      // 即使已经记录了状态，也要确保音乐已暂停
+      if (playerStore.isPlaying) {
+        console.log('[MVView] 路由参数变化，确保音乐已暂停');
+        // 直接暂停音频元素
+        const audioElement = document.getElementById('audio-player');
+        if (audioElement && !audioElement.paused) {
+          audioElement.pause();
+        }
+        // 更新播放器状态
+        playerStore.isPlaying = false;
+      }
     }
     
     // 强制刷新MV数据，不使用缓存
@@ -802,6 +868,19 @@ watch(() => route.params.id, (newId, oldId) => {
   } else if (newId && newId === oldId) {
     // 如果是相同的MV ID，也强制刷新一次，确保能正常播放
     console.log('[MVView] 检测到相同MV ID的重新访问，强制刷新数据');
+    
+    // 确保音乐已暂停
+    if (playerStore.isPlaying) {
+      console.log('[MVView] 相同MV ID重新访问，确保音乐已暂停');
+      // 直接暂停音频元素
+      const audioElement = document.getElementById('audio-player');
+      if (audioElement && !audioElement.paused) {
+        audioElement.pause();
+      }
+      // 更新播放器状态
+      playerStore.isPlaying = false;
+    }
+    
     fetchMVDetail(true);
   }
 }, { immediate: true }); // immediate: true 确保组件创建时也会基于当前ID获取数据
