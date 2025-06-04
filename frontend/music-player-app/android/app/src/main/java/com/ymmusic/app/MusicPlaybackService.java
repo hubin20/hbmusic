@@ -99,13 +99,19 @@ public class MusicPlaybackService extends Service {
             @Override
             public void onSkipToPrevious() {
                 // 通知WebView播放上一首
+                Log.d(TAG, "收到通知栏上一首命令，通知WebView");
                 sendCommandToWebView("previous");
+                // 在通知栏点击上一首后，不立即更新通知栏信息
+                // 等待WebView处理完毕后，会通过updateNowPlaying方法更新
             }
 
             @Override
             public void onSkipToNext() {
                 // 通知WebView播放下一首
+                Log.d(TAG, "收到通知栏下一首命令，通知WebView");
                 sendCommandToWebView("next");
+                // 在通知栏点击下一首后，不立即更新通知栏信息
+                // 等待WebView处理完毕后，会通过updateNowPlaying方法更新
             }
         });
         
@@ -295,6 +301,7 @@ public class MusicPlaybackService extends Service {
      */
     public void updateNotificationInfo(String title, String artist, Bitmap albumArt) {
         // 更新当前信息
+        Log.d(TAG, "更新通知栏信息: " + title + " - " + artist);
         this.currentTitle = title;
         this.currentArtist = artist;
         if (albumArt != null) {

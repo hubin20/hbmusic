@@ -67,6 +67,7 @@ public class MainActivity extends BridgeActivity {
                 if (intent.getAction().equals("YM_MUSIC_CONTROL_ACTION")) {
                     String command = intent.getStringExtra("command");
                     if (command != null) {
+                        Log.d(TAG, "收到音乐控制命令: " + command);
                         // 执行JavaScript调用WebView中的方法
                         final String jsCode;
                         switch (command) {
@@ -89,6 +90,7 @@ public class MainActivity extends BridgeActivity {
                         if (jsCode != null) {
                             runOnUiThread(() -> {
                                 bridge.getWebView().evaluateJavascript(jsCode, null);
+                                Log.d(TAG, "执行JavaScript命令: " + command);
                             });
                         }
                     }
@@ -149,6 +151,17 @@ public class MainActivity extends BridgeActivity {
     }
     
     /**
+     * 绑定音乐服务
+     */
+    private void bindMusicService() {
+        if (!isBound) {
+            Log.d(TAG, "尝试重新绑定音乐服务");
+            Intent intent = new Intent(this, MusicPlaybackService.class);
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+        }
+    }
+    
+    /**
      * 为WebView提供的JavaScript接口
      */
     public class WebAppInterface {
@@ -166,8 +179,15 @@ public class MainActivity extends BridgeActivity {
          */
         @JavascriptInterface
         public void updateNowPlaying(String title, String artist) {
+            Log.d(TAG, "更新通知栏信息: " + title + " - " + artist);
             if (isBound && musicService != null) {
                 musicService.updateNotificationInfo(title, artist);
+            } else {
+                Log.w(TAG, "无法更新通知栏信息: 服务未绑定或为空");
+                // 尝试重新绑定服务
+                if (!isBound) {
+                    bindMusicService();
+                }
             }
         }
         
@@ -176,10 +196,17 @@ public class MainActivity extends BridgeActivity {
          */
         @JavascriptInterface
         public void updateNowPlayingWithCover(String title, String artist, String albumArtUrl) {
+            Log.d(TAG, "更新通知栏信息(带封面): " + title + " - " + artist);
             if (isBound && musicService != null) {
                 // 这里可以添加下载专辑封面的代码
                 // 简单起见，我们先使用默认图标
                 musicService.updateNotificationInfo(title, artist);
+            } else {
+                Log.w(TAG, "无法更新通知栏信息(带封面): 服务未绑定或为空");
+                // 尝试重新绑定服务
+                if (!isBound) {
+                    bindMusicService();
+                }
             }
         }
         
@@ -188,8 +215,15 @@ public class MainActivity extends BridgeActivity {
          */
         @JavascriptInterface
         public void setPlayingState(boolean isPlaying) {
+            Log.d(TAG, "设置播放状态: " + (isPlaying ? "播放" : "暂停"));
             if (isBound && musicService != null) {
                 musicService.setPlayingState(isPlaying);
+            } else {
+                Log.w(TAG, "无法设置播放状态: 服务未绑定或为空");
+                // 尝试重新绑定服务
+                if (!isBound) {
+                    bindMusicService();
+                }
             }
         }
         

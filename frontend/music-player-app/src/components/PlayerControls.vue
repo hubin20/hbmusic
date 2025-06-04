@@ -256,10 +256,19 @@ watch(() => [
     // 如果是Android环境，更新原生服务的歌曲信息
     if (window.AndroidPlayer && typeof window.AndroidPlayer.updateNowPlaying === 'function') {
       try {
+        console.log('[PlayerControls] 更新Android通知栏信息:', 
+          playerStore.currentSong.name, 
+          playerStore.currentSong.artist);
+          
         window.AndroidPlayer.updateNowPlaying(
           playerStore.currentSong.name || '未知歌曲', 
           playerStore.currentSong.artist || '未知艺术家'
         );
+        
+        // 更新播放状态
+        if (typeof window.AndroidPlayer.setPlayingState === 'function') {
+          window.AndroidPlayer.setPlayingState(playerStore.isPlaying);
+        }
       } catch (err) {
         console.warn('[PlayerControls] 无法更新Android通知:', err);
       }

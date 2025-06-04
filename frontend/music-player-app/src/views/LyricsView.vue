@@ -32,7 +32,11 @@
           :key="`lyric-block-${index}`"
           :ref="el => lyricLineRefs[index] = el"
           class="lyric-line-block"
-          :class="{ active: index === playerStore.currentLyricIndex }"
+          :class="{
+            'active': index === playerStore.currentLyricIndex,
+            'pre-active': index === playerStore.currentLyricIndex + 1,
+            'post-active': index === playerStore.currentLyricIndex - 1
+          }"
         >
           <p class="original-lyric" v-if="index === playerStore.currentLyricIndex" v-html="colorizeText(line.text)"></p>
           <p class="original-lyric" v-else>{{ line.text }}</p>
@@ -187,7 +191,16 @@ watch(() => playerStore.currentSong?.id, (newId, oldId) => {
     imageRetryCount = 0; // 重置重试计数器
     
     // 强制获取歌词，这会同时更新专辑图片
-    playerStore.fetchLyrics(newId);
+    // 使用-1参数强制重新加载歌词
+    playerStore.fetchLyrics(newId, -1, 2);
+    
+    // 延迟一点时间后检查歌词是否加载成功
+    setTimeout(() => {
+      if (!playerStore.currentLyrics || playerStore.currentLyrics.length === 0) {
+        console.log(`[LyricsView] 歌词未成功加载，再次尝试获取歌词: ${newId}`);
+        playerStore.fetchLyrics(newId, -1, 2);
+      }
+    }, 1000);
   }
 });
 
@@ -232,10 +245,9 @@ onBeforeUpdate(() => {
   lyricLineRefs.value = [];
 });
 
-// 改进的歌词自动滚动逻辑
+// 监听当前歌词索引变化，滚动到当前行
 watch(() => playerStore.currentLyricIndex, (newIndex) => {
-  if (newIndex >= 0 && lyricLineRefs.value[newIndex] && lyricsContainer.value) {
-    // 使用nextTick确保DOM已更新
+  if (newIndex >= 0 && lyricLineRefs.value[newIndex]) {
     nextTick(() => {
       const activeLineElement = lyricLineRefs.value[newIndex];
       if (activeLineElement) {
@@ -250,7 +262,7 @@ watch(() => playerStore.currentLyricIndex, (newIndex) => {
         // 立即滚动到计算的位置，使用平滑滚动效果
         container.scrollTo({
           top: Math.max(0, scrollToPosition),
-          behavior: 'smooth'
+          behavior: 'auto' // 改为auto，确保立即滚动，不使用平滑滚动
         });
       }
     });
@@ -258,7 +270,7 @@ watch(() => playerStore.currentLyricIndex, (newIndex) => {
     // 如果没有高亮歌词行（例如在歌曲开始前），滚动到顶部
     lyricsContainer.value.scrollTo({
       top: 0,
-      behavior: 'smooth'
+      behavior: 'auto' // 改为auto，确保立即滚动
     });
   }
 }, { flush: 'post' });
@@ -267,18 +279,93 @@ watch(() => playerStore.currentLyricIndex, (newIndex) => {
 watch(() => playerStore.currentSong?.id, (newSongId, oldSongId) => {
   if (newSongId && newSongId !== oldSongId) {
     // 无论当前是否在歌词页面，都获取歌词，确保歌词数据始终是最新的
-    playerStore.fetchLyrics(newSongId);
+    playerStore.fetchLyrics(newSongId).then(() => {
+      // 歌词加载完成后，立即更新当前歌词索引
+      playerStore.updateCurrentLyricIndex(playerStore.currentTime);
+      
+      // 立即滚动到当前歌词位置
+      nextTick(() => {
+        if (playerStore.currentLyricIndex >= 0 && 
+            lyricLineRefs.value[playerStore.currentLyricIndex] && 
+            lyricsContainer.value) {
+          const activeLineElement = lyricLineRefs.value[playerStore.currentLyricIndex];
+          const container = lyricsContainer.value;
+          const lineTop = activeLineElement.offsetTop;
+          const lineHeight = activeLineElement.offsetHeight;
+          const containerHeight = container.clientHeight;
+          
+          const scrollToPosition = lineTop - (containerHeight / 2) + (lineHeight / 2);
+          container.scrollTo({
+            top: Math.max(0, scrollToPosition),
+            behavior: 'auto' // 使用即时滚动，避免动画延迟
+        });
+      }
+      });
+    }).catch(error => {
+      console.error(`[LyricsView] 歌词加载失败:`, error);
+    });
   }
 });
 
-// 监听路由变化，进入歌词页时确保显示歌词
-watch(() => route.path, (newPath) => {
-  if (newPath === '/lyrics' && playerStore.currentSong && playerStore.currentSong.id) {
-    // 无论是否有歌词，都重新获取，确保页面切换时歌词是最新的
-    playerStore.fetchLyrics(playerStore.currentSong.id);
+// 添加对歌词加载状态的监听，确保歌词加载完成后立即更新视图
+watch(() => playerStore.isLoadingLyrics, (isLoading) => {
+  if (!isLoading && playerStore.currentLyrics && playerStore.currentLyrics.length > 0) {
+    console.log(`[LyricsView] 歌词加载完成，立即更新视图，歌词行数: ${playerStore.currentLyrics.length}`);
     
-    // 如果已经有歌词和当前歌词索引，立即滚动到当前歌词位置
+    // 输出歌词示例
+    if (playerStore.currentLyrics.length > 0) {
+      console.log(`[LyricsView] 歌词示例 [0]: ${playerStore.currentLyricIndex} - ${playerStore.currentLyrics[0].text}`);
+      if (playerStore.currentLyrics.length > 1) {
+        console.log(`[LyricsView] 歌词示例 [1]: ${playerStore.currentLyricIndex} - ${playerStore.currentLyrics[1].text}`);
+      }
+    }
+    
+    // 检查是否只有作词作曲信息
+    const onlyHasMetadata = playerStore.currentLyrics.length <= 2 && 
+      playerStore.currentLyrics.every(line => 
+        line.text.includes('作词') || line.text.includes('作曲') || 
+        line.text.includes('编曲') || line.text.includes('制作')
+      );
+      
+    if (onlyHasMetadata) {
+      console.log('[LyricsView] 检测到仅包含作词作曲信息，但无实际歌词内容');
+      
+      // 更新歌曲的作词作曲信息
+      if (playerStore.currentSong) {
+        playerStore.currentLyrics.forEach(line => {
+          if (line.text.includes('作词')) {
+            const lyricistMatch = line.text.match(/作词[:：]?\s*(.+)/);
+            if (lyricistMatch && lyricistMatch[1]) {
+              playerStore.currentSong.lyricist = lyricistMatch[1].trim();
+            }
+          } else if (line.text.includes('作曲')) {
+            const composerMatch = line.text.match(/作曲[:：]?\s*(.+)/);
+            if (composerMatch && composerMatch[1]) {
+              playerStore.currentSong.composer = composerMatch[1].trim();
+            }
+          }
+        });
+        
+        // 触发重新渲染
+        playerStore.currentSong = { ...playerStore.currentSong };
+      }
+      
+      // 尝试重新获取完整歌词
+      if (playerStore.currentSong && playerStore.currentSong.id) {
+        console.log(`[LyricsView] 尝试重新获取完整歌词: ${playerStore.currentSong.id}`);
+        setTimeout(() => {
+          playerStore.fetchLyrics(playerStore.currentSong.id, -1, 2);
+        }, 500);
+      }
+    }
+    
+    // 歌词加载完成，立即更新当前歌词索引
     nextTick(() => {
+      // 强制更新当前歌词索引
+      playerStore.updateCurrentLyricIndex(playerStore.currentTime);
+      console.log(`[LyricsView] 更新后的当前歌词索引: ${playerStore.currentLyricIndex}`);
+      
+      // 确保滚动到当前歌词位置
       if (playerStore.currentLyricIndex >= 0 && lyricLineRefs.value[playerStore.currentLyricIndex] && lyricsContainer.value) {
         const activeLineElement = lyricLineRefs.value[playerStore.currentLyricIndex];
         const container = lyricsContainer.value;
@@ -291,8 +378,63 @@ watch(() => route.path, (newPath) => {
           top: Math.max(0, scrollToPosition),
           behavior: 'auto' // 使用即时滚动，避免动画延迟
         });
+        
+        console.log(`[LyricsView] 已滚动到当前歌词行: ${playerStore.currentLyricIndex}, 位置: ${scrollToPosition}`);
+      } else {
+        console.log(`[LyricsView] 未找到当前歌词行或容器，无法滚动: 索引=${playerStore.currentLyricIndex}, 行元素=${!!lyricLineRefs.value[playerStore.currentLyricIndex]}, 容器=${!!lyricsContainer.value}`);
       }
     });
+  } else if (!isLoading && (!playerStore.currentLyrics || playerStore.currentLyrics.length === 0)) {
+    console.log('[LyricsView] 歌词加载完成，但歌词为空');
+    
+    // 如果当前有歌曲但歌词为空，尝试重新获取
+    if (playerStore.currentSong && playerStore.currentSong.id) {
+      console.log(`[LyricsView] 尝试重新获取歌词: ${playerStore.currentSong.id}`);
+      setTimeout(() => {
+        playerStore.fetchLyrics(playerStore.currentSong.id, -1, 2);
+      }, 500);
+    }
+  }
+});
+
+// 监听路由变化，进入歌词页时确保显示歌词
+watch(() => route.path, (newPath) => {
+  if (newPath === '/lyrics' && playerStore.currentSong && playerStore.currentSong.id) {
+    // 无论是否有歌词，都重新获取，确保页面切换时歌词是最新的
+    // 使用-1参数强制重新加载歌词
+    console.log(`[LyricsView] 进入歌词页面，强制刷新歌词: ${playerStore.currentSong.id}`);
+    playerStore.fetchLyrics(playerStore.currentSong.id, -1, 2);
+    
+    // 立即更新当前歌词索引
+    playerStore.updateCurrentLyricIndex(playerStore.currentTime);
+    
+    // 延迟一点时间后检查歌词是否加载成功
+    setTimeout(() => {
+      if (!playerStore.currentLyrics || playerStore.currentLyrics.length === 0) {
+        console.log(`[LyricsView] 歌词未成功加载，再次尝试获取歌词: ${playerStore.currentSong.id}`);
+        playerStore.fetchLyrics(playerStore.currentSong.id, -1, 2);
+        
+        // 再次更新歌词索引
+        playerStore.updateCurrentLyricIndex(playerStore.currentTime);
+      }
+      
+      // 如果已经有歌词和当前歌词索引，立即滚动到当前歌词位置
+      nextTick(() => {
+        if (playerStore.currentLyricIndex >= 0 && lyricLineRefs.value[playerStore.currentLyricIndex] && lyricsContainer.value) {
+          const activeLineElement = lyricLineRefs.value[playerStore.currentLyricIndex];
+          const container = lyricsContainer.value;
+          const lineTop = activeLineElement.offsetTop;
+          const lineHeight = activeLineElement.offsetHeight;
+          const containerHeight = container.clientHeight;
+          
+          const scrollToPosition = lineTop - (containerHeight / 2) + (lineHeight / 2);
+          container.scrollTo({
+            top: Math.max(0, scrollToPosition),
+            behavior: 'auto' // 使用即时滚动，避免动画延迟
+          });
+        }
+      });
+    }, 500);
   }
 });
 
@@ -322,9 +464,24 @@ onMounted(() => {
     localStorage.setItem('previousRouteBeforeLyrics', previousPath);
   }
   
-  // 确保在组件挂载时立即获取歌词
+  // 确保在组件挂载时立即获取歌词，使用-1参数强制重新加载
   if (playerStore.currentSong && playerStore.currentSong.id) {
-    playerStore.fetchLyrics(playerStore.currentSong.id);
+    console.log(`[LyricsView] 组件挂载，强制刷新歌词: ${playerStore.currentSong.id}`);
+    playerStore.fetchLyrics(playerStore.currentSong.id, -1, 2);
+    
+    // 立即更新当前歌词索引
+    playerStore.updateCurrentLyricIndex(playerStore.currentTime);
+    
+    // 延迟一点时间后检查歌词是否加载成功
+    setTimeout(() => {
+      if (!playerStore.currentLyrics || playerStore.currentLyrics.length === 0) {
+        console.log(`[LyricsView] 歌词未成功加载，再次尝试获取歌词: ${playerStore.currentSong.id}`);
+        playerStore.fetchLyrics(playerStore.currentSong.id, -1, 2);
+        
+        // 再次更新歌词索引
+        playerStore.updateCurrentLyricIndex(playerStore.currentTime);
+      }
+    }, 500);
   }
   
   // 使用window事件监听器处理路由离开
@@ -473,13 +630,16 @@ onUnmounted(() => {
   margin: 2px 0; /* 减小外边距 */
   transition: all 0.3s ease;
   text-align: center; /* 确保每行歌词居中显示 */
+  opacity: 0.6; /* 默认状态下的透明度 */
+  transform: scale(0.95); /* 默认状态下稍微缩小 */
+  will-change: transform, opacity; /* 优化性能 */
 }
 
 .lyric-line-block p { /* Common styling for both lyric lines */
   margin: 0;
   padding: 2px 0;
   line-height: 1.5; /* 减小行高 */
-  transition: color 0.3s ease, font-size 0.3s ease, opacity 0.3s ease;
+  transition: color 0.2s ease, font-size 0.2s ease, opacity 0.2s ease;
 }
 
 .original-lyric {
@@ -495,6 +655,12 @@ onUnmounted(() => {
 }
 
 /* 活动歌词行样式 - 修改为多彩字符效果 */
+.lyric-line-block.active {
+  opacity: 1; /* 活动行完全不透明 */
+  transform: scale(1); /* 活动行正常大小 */
+  transition: all 0.2s ease; /* 快速过渡 */
+}
+
 .lyric-line-block.active .original-lyric {
   font-size: 1.1rem; /* 减小高亮歌词字体大小 */
   font-weight: 500; /* 减轻字体粗细 */
@@ -507,11 +673,34 @@ onUnmounted(() => {
   text-shadow: 0 0 8px rgba(255, 255, 255, 0.3); /* 添加轻微的发光效果 */
 }
 
+/* 预激活行样式 - 下一句歌词 */
+.lyric-line-block.pre-active {
+  opacity: 0.8; /* 比普通行更不透明 */
+  transform: scale(0.98); /* 比普通行更大 */
+  transition: all 0.3s ease; /* 平滑过渡 */
+}
+
+.lyric-line-block.pre-active .original-lyric {
+  color: rgba(255, 255, 255, 0.75); /* 比普通行更亮 */
+}
+
+/* 后激活行样式 - 上一句歌词 */
+.lyric-line-block.post-active {
+  opacity: 0.7; /* 比普通行更不透明 */
+  transform: scale(0.97); /* 比普通行更大 */
+  transition: all 0.3s ease; /* 平滑过渡 */
+}
+
+.lyric-line-block.post-active .original-lyric {
+  color: rgba(255, 255, 255, 0.7); /* 比普通行更亮 */
+}
+
 /* 为彩色字符添加特效 */
 .lyric-line-block.active .original-lyric span {
   display: inline-block;
-  transition: transform 0.3s ease;
+  transition: transform 0.2s ease, opacity 0.2s ease; /* 更快的过渡 */
   animation: colorPulse 1.5s infinite alternate;
+  will-change: opacity, text-shadow; /* 优化性能 */
 }
 
 /* 添加轻微的颜色脉动动画 */

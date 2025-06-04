@@ -109,6 +109,17 @@ export function watchPlayerChanges(playerStore, mediaControls) {
   // 监听当前歌曲变化
   playerStore.$subscribe((mutation, state) => {
     if (state.currentSong) {
+      console.log('[MediaSession] 检测到歌曲变化，更新媒体会话信息');
+      mediaControls.updateNowPlaying();
+    }
+  });
+
+  // 专门监听currentSong.id的变化，确保在歌曲切换时更新通知栏
+  let lastSongId = null;
+  playerStore.$subscribe((mutation, state) => {
+    if (state.currentSong && state.currentSong.id !== lastSongId) {
+      lastSongId = state.currentSong.id;
+      console.log('[MediaSession] 检测到歌曲ID变化，强制更新媒体会话信息');
       mediaControls.updateNowPlaying();
     }
   });
