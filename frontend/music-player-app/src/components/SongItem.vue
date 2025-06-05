@@ -69,7 +69,7 @@ const props = defineProps({
   isCurrent: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(['play-song']);
+const emit = defineEmits(['play-song', 'favoriteChanged']);
 
 // 处理点击事件
 const handleClick = (event) => {
@@ -103,7 +103,20 @@ const addToFavorites = async () => {
     const result = removeFromFavorites('SONGS', props.song.id);
     if (result) {
       isFavorited.value = false;
-      ElMessage.success('已取消喜欢');
+      ElMessage({
+        message: '已取消喜欢',
+        type: 'success',
+        duration: 3000, // 设置3秒后自动关闭
+        showClose: true // 显示关闭按钮
+      });
+      
+      // 触发自定义事件，通知父组件收藏状态已更改并需要从列表中移除
+      emit('favoriteChanged', { 
+        id: props.song.id, 
+        isFavorited: false,
+        isFromKw: props.song.isFromKw,
+        shouldRemove: true // 添加标记，表示应该从列表中移除
+      });
     } else {
       ElMessage.error('取消喜欢失败');
     }
@@ -127,18 +140,33 @@ const addToFavorites = async () => {
     const isKwSong = props.song.isFromKw === true || 
       props.song.rid || 
       (props.song.id && String(props.song.id).startsWith('kw_')) || 
-      (props.song.id && String(props.song.id).startsWith('kw-'));
+      (props.song.id && String(props.song.id).startsWith('kw-')) ||
+      (props.song.source === 'kw') ||
+      (props.song.originalData && props.song.originalData.source === 'kw');
     
     // 设置isFromKw标记
     songData.isFromKw = isKwSong;
     
     // 如果是酷我歌曲，确保保存rid字段
     if (isKwSong) {
-      songData.rid = props.song.rid || null;
-      console.log(`[SongItem] 收藏酷我歌曲: ${props.song.name}, ID: ${props.song.id}, isFromKw: true`);
+      songData.rid = props.song.rid || 
+                    (props.song.id && String(props.song.id).startsWith('kw_') ? 
+                     String(props.song.id).substring(3) : null) ||
+                    (props.song.id && String(props.song.id).startsWith('kw-') ? 
+                     String(props.song.id).substring(3) : null);
+      
+      // 强制刷新URL标记，确保播放时获取最新URL
+      songData.forceRefreshUrl = true;
+      
+      console.log(`[SongItem] 收藏酷我歌曲: ${props.song.name}, ID: ${props.song.id}, isFromKw: true, RID: ${songData.rid || '未知'}`);
     } else {
       // 非酷我歌曲，确保标记为false
       songData.isFromKw = false;
+      
+      // 如果是灰色歌曲（通常是网易云无版权），标记forceRefreshUrl
+      // 这样播放时会尝试从酷我API获取
+      songData.forceRefreshUrl = true;
+      
       console.log(`[SongItem] 收藏网易云歌曲: ${props.song.name}, ID: ${props.song.id}, isFromKw: false, URL: ${songData.url || 'null'}`);
     }
     
@@ -146,38 +174,19 @@ const addToFavorites = async () => {
     const result = addSongToFavorites('SONGS', songData);
     if (result) {
       isFavorited.value = true;
-      ElMessage.success('已添加到我喜欢的音乐');
-      
-      // 如果是网易云歌曲且没有URL，在后台异步获取URL
-      if (!isKwSong && !songData.url) {
-        // 使用setTimeout将URL获取放到下一个事件循环，不阻塞UI
-        setTimeout(async () => {
-          try {
-            console.log(`[SongItem] 后台异步获取网易云歌曲URL: ${props.song.name}, ID: ${props.song.id}`);
-            const cleanId = String(props.song.id).replace(/^main_/, '');
-            
-            // 尝试从播放器获取URL
-            const songDetails = await playerStore._fetchSongUrlFromMainApi(cleanId);
-            
-            if (songDetails && songDetails.url) {
-              console.log(`[SongItem] 成功获取网易云歌曲URL: ${props.song.name}, URL: ${songDetails.url}`);
+      ElMessage({
+        message: '已添加到我喜欢的音乐',
+        type: 'success',
+        duration: 3000, // 设置3秒后自动关闭
+        showClose: true // 显示关闭按钮
+      });
               
-              // 更新收藏中的歌曲URL
-              try {
-                const { updateFavoriteSongUrl } = await import('../services/favoritesService');
-                updateFavoriteSongUrl(songData.id, songDetails.url, Date.now());
-                console.log(`[SongItem] 已更新收藏歌曲URL: ${props.song.name}`);
-              } catch (e) {
-                console.error(`[SongItem] 更新收藏歌曲URL失败: ${props.song.name}`, e);
-              }
-            } else {
-              console.log(`[SongItem] 无法获取网易云歌曲URL: ${props.song.name}`);
-            }
-          } catch (error) {
-            console.error(`[SongItem] 后台获取网易云歌曲URL失败: ${props.song.name}`, error);
-          }
-        }, 100);
-      }
+      // 触发自定义事件，通知父组件收藏状态已更改
+      emit('favoriteChanged', { 
+        id: props.song.id, 
+        isFavorited: true, 
+        isFromKw: songData.isFromKw 
+      });
     } else {
       ElMessage.error('添加失败');
     }

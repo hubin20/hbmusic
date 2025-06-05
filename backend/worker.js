@@ -66,10 +66,14 @@ function convertHttpToHttps(data) {
 /**
  * 处理API响应，确保所有HTTP图片链接转为HTTPS
  * @param {Response} response - 从源API获取的响应
+ * @param {Request} request - 原始请求对象，用于获取Origin
  * @returns {Promise<Response>} - 处理后的响应
  */
-async function processApiResponse(response) {
+async function processApiResponse(response, request) {
   try {
+    // 获取请求的Origin头部
+    const origin = request?.headers?.get('Origin') || '*';
+
     const contentType = response.headers.get('content-type');
 
     // 只处理JSON响应
@@ -108,16 +112,19 @@ async function processApiResponse(response) {
       // 转回JSON对象
       const finalProcessedData = JSON.parse(httpsJsonString);
 
-      return cors()(new Response(JSON.stringify(finalProcessedData), {
+      return cors({ origin })(new Response(JSON.stringify(finalProcessedData), {
         headers: { 'Content-Type': 'application/json' }
       }));
     } else {
       // 非JSON响应直接返回
-      return cors()(response);
+      return cors({ origin })(response);
     }
   } catch (error) {
     console.error('处理API响应失败:', error);
-    return cors()(new Response(JSON.stringify({
+    // 获取请求的Origin头部（如果在catch块中，确保request存在）
+    const origin = request?.headers?.get('Origin') || '*';
+
+    return cors({ origin })(new Response(JSON.stringify({
       error: '处理API响应失败',
       details: error.message
     }), {
@@ -128,13 +135,20 @@ async function processApiResponse(response) {
 }
 
 // 处理CORS预检请求
-router.options('*', cors());
+router.options('*', (request) => {
+  // 获取请求的Origin头部
+  const origin = request?.headers?.get('Origin') || '*';
+  return cors({ origin })();
+});
 
 /**
  * 根路径处理 - 返回API状态信息
  */
-router.get('/', async () => {
-  return cors()(new Response(JSON.stringify({
+router.get('/', async (request) => {
+  // 获取请求的Origin头部
+  const origin = request?.headers?.get('Origin') || '*';
+
+  return cors({ origin })(new Response(JSON.stringify({
     status: 'ok',
     api: 'HBMusic API Worker',
     version: '1.0.0'
@@ -149,9 +163,12 @@ router.get('/', async () => {
 router.get('/recommend/songs', async (request) => {
   try {
     const response = await fetch(`${API_BASE_URL}/recommend/songs`);
-    return processApiResponse(response);
+    return processApiResponse(response, request);
   } catch (error) {
-    return cors()(new Response(JSON.stringify({
+    // 获取请求的Origin头部
+    const origin = request?.headers?.get('Origin') || '*';
+
+    return cors({ origin })(new Response(JSON.stringify({
       message: '获取推荐歌曲失败',
       error: error.message
     }), {
@@ -169,7 +186,10 @@ router.get('/search', async (request) => {
   const keywords = url.searchParams.get('keywords');
 
   if (!keywords) {
-    return cors()(new Response(JSON.stringify({
+    // 获取请求的Origin头部
+    const origin = request?.headers?.get('Origin') || '*';
+
+    return cors({ origin })(new Response(JSON.stringify({
       message: '缺少关键词参数 (keywords)'
     }), {
       status: 400,
@@ -179,9 +199,12 @@ router.get('/search', async (request) => {
 
   try {
     const response = await fetch(`${API_BASE_URL}/search?keywords=${encodeURIComponent(keywords)}`);
-    return processApiResponse(response);
+    return processApiResponse(response, request);
   } catch (error) {
-    return cors()(new Response(JSON.stringify({
+    // 获取请求的Origin头部
+    const origin = request?.headers?.get('Origin') || '*';
+
+    return cors({ origin })(new Response(JSON.stringify({
       message: '搜索歌曲失败',
       error: error.message
     }), {
@@ -199,7 +222,10 @@ router.get('/song/url', async (request) => {
   const id = url.searchParams.get('id');
 
   if (!id) {
-    return cors()(new Response(JSON.stringify({
+    // 获取请求的Origin头部
+    const origin = request?.headers?.get('Origin') || '*';
+
+    return cors({ origin })(new Response(JSON.stringify({
       message: '缺少歌曲 ID 参数 (id)'
     }), {
       status: 400,
@@ -209,9 +235,12 @@ router.get('/song/url', async (request) => {
 
   try {
     const response = await fetch(`${API_BASE_URL}/song/url/v1?id=${id}&level=lossless`);
-    return processApiResponse(response);
+    return processApiResponse(response, request);
   } catch (error) {
-    return cors()(new Response(JSON.stringify({
+    // 获取请求的Origin头部
+    const origin = request?.headers?.get('Origin') || '*';
+
+    return cors({ origin })(new Response(JSON.stringify({
       message: '获取歌曲链接失败',
       error: error.message
     }), {

@@ -30,7 +30,64 @@ try {
 const app = express();
 const port = process.env.PORT || 3000; // 端口可配置
 
-app.use(cors()); // 允许所有来源的跨域请求，生产环境中建议配置更严格的规则
+// 定义允许的域名列表
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://localhost:5173',
+  'http://localhost',
+  'https://localhost',
+  'https://music.931125.xyz',
+  'http://music.931125.xyz',
+  'https://er-sycdn.kuwo.cn',
+  'http://er-sycdn.kuwo.cn',
+  'https://kw-api.cenguigui.cn',
+  'http://kw-api.cenguigui.cn'
+];
+
+// 检查是否是允许的域名，包括er-sycdn.kuwo.cn的子域名
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+
+  // 检查是否在允许列表中
+  if (allowedOrigins.includes(origin)) {
+    return true;
+  }
+
+  // 检查是否是er-sycdn.kuwo.cn的子域名
+  try {
+    if (origin.includes('er-sycdn.kuwo.cn') ||
+      origin.includes('.kuwo.cn') ||
+      origin === 'http://kuwo.cn' ||
+      origin === 'https://kuwo.cn') {
+      return true;
+    }
+  } catch (e) {
+    // 如果解析失败，返回false
+    return false;
+  }
+
+  return false;
+}
+
+// 配置CORS中间件
+app.use(cors({
+  origin: function (origin, callback) {
+    // 允许没有origin的请求（比如同源请求）
+    if (!origin) return callback(null, true);
+
+    if (isAllowedOrigin(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS拒绝来自 ${origin} 的请求`);
+      callback(new Error('不允许的跨域请求'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  maxAge: 86400 // 预检请求缓存24小时
+}));
+
 app.use(express.json()); // 用于解析 JSON 请求体
 
 // 从环境变量或配置文件中获取API基础URL
