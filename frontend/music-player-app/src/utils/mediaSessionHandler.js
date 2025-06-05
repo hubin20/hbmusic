@@ -65,23 +65,41 @@ export function initMediaSessionHandler() {
 
       // 如果支持Web媒体会话API
       if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: playerStore.currentSong.name || '未知歌曲',
-          artist: playerStore.currentSong.artist || '未知艺术家',
-          album: playerStore.currentSong.album || '未知专辑',
-          artwork: [
-            { src: playerStore.currentSong.albumArt, sizes: '512x512', type: 'image/jpeg' }
-          ]
-        });
+        // 确保albumArt不为空，使用默认封面作为备选
+        const albumArt = playerStore.currentSong.albumArt || 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg';
 
-        // 设置媒体会话动作处理程序
-        navigator.mediaSession.setActionHandler('play', () => mediaControls.play());
-        navigator.mediaSession.setActionHandler('pause', () => mediaControls.pause());
-        navigator.mediaSession.setActionHandler('previoustrack', () => mediaControls.previous());
-        navigator.mediaSession.setActionHandler('nexttrack', () => mediaControls.next());
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: playerStore.currentSong.name || '未知歌曲',
+            artist: playerStore.currentSong.artist || '未知艺术家',
+            album: playerStore.currentSong.album || '未知专辑',
+            artwork: [
+              { src: albumArt, sizes: '512x512', type: 'image/jpeg' }
+            ]
+          });
 
-        // 更新播放状态
-        navigator.mediaSession.playbackState = playerStore.isPlaying ? 'playing' : 'paused';
+          // 设置媒体会话动作处理程序
+          navigator.mediaSession.setActionHandler('play', () => mediaControls.play());
+          navigator.mediaSession.setActionHandler('pause', () => mediaControls.pause());
+          navigator.mediaSession.setActionHandler('previoustrack', () => mediaControls.previous());
+          navigator.mediaSession.setActionHandler('nexttrack', () => mediaControls.next());
+
+          // 更新播放状态
+          navigator.mediaSession.playbackState = playerStore.isPlaying ? 'playing' : 'paused';
+        } catch (error) {
+          console.error('更新媒体会话元数据失败:', error);
+
+          // 尝试不带artwork创建MediaMetadata
+          try {
+            navigator.mediaSession.metadata = new MediaMetadata({
+              title: playerStore.currentSong.name || '未知歌曲',
+              artist: playerStore.currentSong.artist || '未知艺术家',
+              album: playerStore.currentSong.album || '未知专辑'
+            });
+          } catch (fallbackError) {
+            console.error('创建基础媒体会话元数据也失败:', fallbackError);
+          }
+        }
       }
     }
   };

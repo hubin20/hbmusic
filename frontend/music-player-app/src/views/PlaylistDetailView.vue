@@ -329,7 +329,7 @@ const fetchPlaylistDetail = async (forceRefresh = false) => {
 };
 
 // 处理主API歌单响应的辅助函数
-const handleMainPlaylistResponse = (response, playlistId, isRanking = false) => {
+const handleMainPlaylistResponse = async (response, playlistId, isRanking = false) => {
   playlistDetail.value = {
     id: response.playlist.id,
     name: response.playlist.name,
@@ -349,17 +349,53 @@ const handleMainPlaylistResponse = (response, playlistId, isRanking = false) => 
     isRanking: isRanking,
     updateFrequency: response.playlist.updateFrequency || (isRanking ? '每日更新' : undefined)
   };
-  if (Array.isArray(response.playlist.tracks)) {
-    playlistSongs.value = response.playlist.tracks.map(track => ({
-      ...track,
-      dt: track.dt || track.duration || 0, 
-      al: track.al ? {
-        ...track.al,
-        picUrl: convertHttpToHttps(track.al.picUrl)
-      } : track.al,
-      source: 'main'
-    }));
+  
+  // 获取所有歌曲
+  try {
+    console.log(`[PlaylistDetailView] 开始获取歌单所有歌曲, ID: ${playlistId}`);
+    // 添加延时以防止请求过快被限制
+    await new Promise(resolve => setTimeout(resolve, 300));
+    
+    const tracksResponse = await getPlaylistTracks(playlistId);
+    if (tracksResponse.code === 200 && Array.isArray(tracksResponse.songs)) {
+      playlistSongs.value = tracksResponse.songs.map(track => ({
+        ...track,
+        dt: track.dt || track.duration || 0, 
+        al: track.al ? {
+          ...track.al,
+          picUrl: convertHttpToHttps(track.al.picUrl)
+        } : track.al,
+        source: 'main'
+      }));
+      console.log(`[PlaylistDetailView] 成功获取歌单所有歌曲, 数量: ${playlistSongs.value.length}`);
+    } else if (Array.isArray(response.playlist.tracks)) {
+      // 如果获取失败，使用歌单详情中的歌曲列表
+      playlistSongs.value = response.playlist.tracks.map(track => ({
+        ...track,
+        dt: track.dt || track.duration || 0, 
+        al: track.al ? {
+          ...track.al,
+          picUrl: convertHttpToHttps(track.al.picUrl)
+        } : track.al,
+        source: 'main'
+      }));
+      console.log(`[PlaylistDetailView] 使用歌单详情中的歌曲列表, 数量: ${playlistSongs.value.length}`);
+    }
+  } catch (error) {
+    console.error(`[PlaylistDetailView] 获取歌单所有歌曲失败, 使用歌单详情中的歌曲列表:`, error);
+    if (Array.isArray(response.playlist.tracks)) {
+      playlistSongs.value = response.playlist.tracks.map(track => ({
+        ...track,
+        dt: track.dt || track.duration || 0, 
+        al: track.al ? {
+          ...track.al,
+          picUrl: convertHttpToHttps(track.al.picUrl)
+        } : track.al,
+        source: 'main'
+      }));
+    }
   }
+  
   // 缓存获取到的数据
   cachedPlaylistData[playlistId] = { detail: playlistDetail.value, songs: playlistSongs.value };
   console.log(`[PlaylistDetailView] 缓存${isRanking ? '排行榜' : '主API歌单'}数据, ID: ${playlistId}`);
@@ -393,6 +429,7 @@ const handleKwPlaylistResponse = async (kwResponse, playlistId) => {
   };
 
   if (Array.isArray(kwData.musicList)) {
+    console.log(`[PlaylistDetailView] 处理酷我歌单歌曲列表, 数量: ${kwData.musicList.length}`);
     const songPromises = kwData.musicList.map(async (songStub, index) => {
       // 确保歌曲ID格式一致，使用kw_前缀而不是kw-
       const kwRid = songStub.rid || songStub.id;
@@ -403,6 +440,9 @@ const handleKwPlaylistResponse = async (kwResponse, playlistId) => {
       let albumName = songStub.album || '未知专辑';
 
       try {
+        // 添加延时以防止请求过快被限制
+        await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
+        
         const songObjectForApi = {
           id: `kw_${kwRid}`,
           name: songStub.name || '未知歌曲',
@@ -435,7 +475,24 @@ const handleKwPlaylistResponse = async (kwResponse, playlistId) => {
         kwRid: kwRid,   
       };
     });
-    playlistSongs.value = await Promise.all(songPromises);
+    
+    // 分批处理歌曲，避免同时发起过多请求
+    const batchSize = 10;
+    const batches = [];
+    for (let i = 0; i < songPromises.length; i += batchSize) {
+      batches.push(songPromises.slice(i, i + batchSize));
+    }
+    
+    const allSongs = [];
+    for (const batch of batches) {
+      const batchResults = await Promise.all(batch);
+      allSongs.push(...batchResults);
+      // 每批处理完后添加延时
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    
+    playlistSongs.value = allSongs;
+    console.log(`[PlaylistDetailView] 酷我歌单歌曲处理完成, 数量: ${playlistSongs.value.length}`);
   }
   // 缓存获取到的数据
   cachedPlaylistData[playlistId] = { detail: playlistDetail.value, songs: playlistSongs.value };

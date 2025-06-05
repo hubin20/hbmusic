@@ -60,8 +60,8 @@
         :key="song.id"
         :song="formatSongData(song, albumData.album)" 
         :index="index"
-        :is-playing="playerStore.currentSongIndex === index && playerStore.currentSong?.albumId === albumData.album.id && playerStore.isPlaying"
-        :is-current="playerStore.currentSongIndex === index && playerStore.currentSong?.albumId === albumData.album.id"
+        :is-playing="isCurrentPlayingSong(song.id, index)"
+        :is-current="isCurrentSong(song.id, index)"
         @play-song="playSelectedSongFromAlbum"
       />
     </div>
@@ -302,6 +302,33 @@ const goBack = () => {
       router.push('/');
     }
   }
+};
+
+// 判断是否是当前歌曲（无论是否在播放）
+const isCurrentSong = (songId, index) => {
+  if (!playerStore.currentSong) return false;
+  
+  // 检查是否是当前专辑的歌曲
+  const isCurrentAlbum = playerStore.currentSong?.albumId === albumData.value?.album.id;
+  
+  // 检查索引是否匹配（当前专辑的情况）
+  if (isCurrentAlbum && playerStore.currentSongIndex === index) {
+    return true;
+  }
+  
+  // 检查ID是否匹配（可能来自不同来源但是同一首歌）
+  const currentId = String(playerStore.currentSong.id);
+  const compareId = String(songId);
+  
+  // 直接ID匹配
+  if (currentId === compareId) return true;
+  
+  return false;
+};
+
+// 判断是否是当前正在播放的歌曲
+const isCurrentPlayingSong = (songId, index) => {
+  return isCurrentSong(songId, index) && playerStore.isPlaying;
 };
 
 onMounted(() => {

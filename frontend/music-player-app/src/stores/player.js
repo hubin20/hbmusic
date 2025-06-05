@@ -957,7 +957,7 @@ export const usePlayerStore = defineStore('player', {
             level: 'lossless' // 修改为lossless无损音质
             // 移除format参数，使用API默认格式
           },
-          timeout: 10000 // 设置超时时间为10秒
+          timeout: 30000 // 增加超时时间为30秒
         });
 
         if (songInfoResponse.data && songInfoResponse.data.code === 200 && songInfoResponse.data.data) {
@@ -995,7 +995,13 @@ export const usePlayerStore = defineStore('player', {
           throw new Error(`酷我API返回错误码: ${songInfoResponse?.data?.code || '未知'}`);
         }
       } catch (infoError) {
-        console.error(`[PlayerStore] _fetchKwSongDetailsByRid: 获取酷我歌曲详情(RID: ${kwRid})时出错:`, infoError);
+        // 只有在非超时错误或调试模式下才输出详细错误
+        if (infoError.code !== 'ECONNABORTED') {
+          console.error(`[PlayerStore] _fetchKwSongDetailsByRid: 获取酷我歌曲详情(RID: ${kwRid})时出错:`, infoError);
+        } else {
+          // 对于超时错误，只输出简单信息
+          console.warn(`[PlayerStore] _fetchKwSongDetailsByRid: 获取酷我歌曲详情(RID: ${kwRid})超时，使用基本信息`);
+        }
 
         // 重试逻辑
         const maxRetries = 2;

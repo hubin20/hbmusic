@@ -76,43 +76,17 @@
             <div class="cell album-cell">专辑</div>
             <div class="cell actions-cell"></div>
           </div>
-          <div 
+          
+          <SongItem
             v-for="(song, index) in favoriteSongs" 
-            :key="song.id" 
-            class="song-item-row-new"
-            @click="playSong(song, index)"
-            :class="{ 
-              'playing': isCurrentSong(song.id),
-              'actually-playing': isSongPlaying(song.id)
-            }"
-          >
-            <div class="cell index-cell">
-              <div v-if="isCurrentSong(song.id) && isPlaying" class="playing-indicator-bar">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-              <span v-else class="song-number">{{ index + 1 }}</span>
-            </div>
-            <div class="cell title-cell">
-              <span v-if="song.isFromKw" class="kw-hr-badge">HR</span>
-              <span class="song-name-text">{{ song.name }}</span>
-            </div>
-            <div class="cell artist-cell">
-              <span class="artist-name-text">{{ song.artist || '未知歌手' }}</span>
-            </div>
-            <div class="cell album-cell">
-              <span>{{ song.album || '未知专辑' }}</span>
-            </div>
-            <div class="cell actions-cell">
-              <div class="song-actions">
-                <button class="action-icon" @click.stop="removeFavorite('songs', song.id)">
-                  <el-icon><Close /></el-icon>
-                </button>
-              </div>
-            </div>
-          </div>
+            :key="song.id"
+            :song="song"
+            :index="index"
+            :is-playing="isSongPlaying(song.id)"
+            :is-current="isCurrentSong(song.id)"
+            @play-song="handlePlaySong"
+            @favoriteChanged="handleFavoriteChanged"
+          />
         </div>
       </div>
       
@@ -285,6 +259,7 @@ import { getFavorites, removeFromFavorites } from '../services/favoritesService'
 import { usePlayerStore } from '../stores/player';
 import { Close } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
+import SongItem from '../components/SongItem.vue';
 
 // 定义组件名称以支持keep-alive
 defineComponent({
@@ -690,6 +665,22 @@ const playAllFavorites = () => {
       console.error(`[FavoritesView] 播放全部歌曲出错: ${error.message}`);
       ElMessage.error(`播放失败: ${error.message || '未知错误'}`);
     }
+  }
+};
+
+// 处理SongItem组件的播放事件
+const handlePlaySong = (songData) => {
+  // songData包含song和index
+  playSong(songData.song, songData.index);
+};
+
+// 处理SongItem组件的收藏状态变更事件
+const handleFavoriteChanged = (data) => {
+  // 如果是取消收藏且需要从列表中移除
+  if (data.shouldRemove && !data.isFavorited) {
+    console.log(`[FavoritesView] 收到取消收藏事件，从列表中移除歌曲ID: ${data.id}`);
+    // 从当前显示的列表中移除
+    favoriteSongs.value = favoriteSongs.value.filter(song => song.id !== data.id);
   }
 };
 

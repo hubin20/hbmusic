@@ -43,7 +43,7 @@
       <div v-else class="song-list-body">
         <SongItem 
           v-for="(song, index) in playerStore.playlist" 
-          :key="`${song.id}-${index}`" 
+          :key="song.id" 
           :song="song" 
           :index="index"
           :is-playing="playerStore.currentSongIndex === index && playerStore.isPlaying"

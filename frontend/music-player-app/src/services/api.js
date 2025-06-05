@@ -64,11 +64,11 @@ export const getPlaylistDetail = async (id) => {
 /**
  * 获取歌单中的所有歌曲
  * @param {number|string} id - 歌单ID
- * @param {number} limit - 每页数量
+ * @param {number} limit - 每页数量，设置为9999以获取所有歌曲
  * @param {number} offset - 分页偏移量
  * @returns {Promise} 返回歌单歌曲列表
  */
-export const getPlaylistTracks = async (id, limit = 50, offset = 0) => {
+export const getPlaylistTracks = async (id, limit = 9999, offset = 0) => {
   try {
     const response = await axios.get(`${BASE_URL}/playlist/track/all`, {
       params: { id, limit, offset }
@@ -251,10 +251,10 @@ export const getKwPlaylists = async (name = '精选', page = 1, limit = 30) => {
  * 获取酷我歌单详情
  * @param {string|number} id - 歌单ID
  * @param {number} page - 页数
- * @param {number} limit - 每页数量
+ * @param {number} limit - 每页数量，设置为9999以获取所有歌曲
  * @returns {Promise} 返回酷我歌单详情数据
  */
-export const getKwPlaylistDetail = async (id, page = 1, limit = 30) => {
+export const getKwPlaylistDetail = async (id, page = 1, limit = 9999) => {
   try {
     // 处理带有"kw-"或"kw_"前缀的ID
     const idStr = id.toString();

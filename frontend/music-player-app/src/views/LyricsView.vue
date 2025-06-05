@@ -417,23 +417,23 @@ watch(() => route.path, (newPath) => {
         // 再次更新歌词索引
         playerStore.updateCurrentLyricIndex(playerStore.currentTime);
       }
-      
-      // 如果已经有歌词和当前歌词索引，立即滚动到当前歌词位置
-      nextTick(() => {
-        if (playerStore.currentLyricIndex >= 0 && lyricLineRefs.value[playerStore.currentLyricIndex] && lyricsContainer.value) {
-          const activeLineElement = lyricLineRefs.value[playerStore.currentLyricIndex];
-          const container = lyricsContainer.value;
-          const lineTop = activeLineElement.offsetTop;
-          const lineHeight = activeLineElement.offsetHeight;
-          const containerHeight = container.clientHeight;
-          
-          const scrollToPosition = lineTop - (containerHeight / 2) + (lineHeight / 2);
-          container.scrollTo({
-            top: Math.max(0, scrollToPosition),
-            behavior: 'auto' // 使用即时滚动，避免动画延迟
-          });
-        }
-      });
+    
+    // 如果已经有歌词和当前歌词索引，立即滚动到当前歌词位置
+    nextTick(() => {
+      if (playerStore.currentLyricIndex >= 0 && lyricLineRefs.value[playerStore.currentLyricIndex] && lyricsContainer.value) {
+        const activeLineElement = lyricLineRefs.value[playerStore.currentLyricIndex];
+        const container = lyricsContainer.value;
+        const lineTop = activeLineElement.offsetTop;
+        const lineHeight = activeLineElement.offsetHeight;
+        const containerHeight = container.clientHeight;
+        
+        const scrollToPosition = lineTop - (containerHeight / 2) + (lineHeight / 2);
+        container.scrollTo({
+          top: Math.max(0, scrollToPosition),
+          behavior: 'auto' // 使用即时滚动，避免动画延迟
+        });
+      }
+    });
     }, 500);
   }
 });

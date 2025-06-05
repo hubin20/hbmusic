@@ -169,11 +169,62 @@ export const removeFromFavorites = (type, id) => {
 export const isFavorited = (type, id) => {
   if (!id) return false;
 
+  const key = STORAGE_KEYS[type.toUpperCase()];
+  if (!key) return false;
+
   try {
     const favorites = getFavorites(type);
-    return favorites.some(item => item.id === id);
+    const idStr = String(id);
+
+    // 直接匹配原始ID
+    if (favorites.some(item => String(item.id) === idStr)) {
+      return true;
+    }
+
+    // 如果是歌曲，进行更复杂的匹配
+    if (type.toUpperCase() === 'SONGS') {
+      // 检查是否是酷我歌曲ID (格式为 kw_123456)
+      if (idStr.startsWith('kw_')) {
+        const kwId = idStr.substring(3); // 移除 'kw_' 前缀
+        // 搜索不带前缀的ID
+        if (favorites.some(item => String(item.id) === kwId)) {
+          return true;
+        }
+        // 搜索带rid字段的歌曲
+        if (favorites.some(item => item.rid && String(item.rid) === kwId)) {
+          return true;
+        }
+      }
+      // 检查是否是酷我歌曲ID (格式为 kw-123456)
+      else if (idStr.startsWith('kw-')) {
+        const kwId = idStr.substring(3); // 移除 'kw-' 前缀
+        // 搜索不带前缀的ID
+        if (favorites.some(item => String(item.id) === kwId)) {
+          return true;
+        }
+        // 搜索带rid字段的歌曲
+        if (favorites.some(item => item.rid && String(item.rid) === kwId)) {
+          return true;
+        }
+      }
+      // 检查常规ID在酷我收藏中的匹配
+      else {
+        // 搜索带kw_前缀的ID
+        if (favorites.some(item => String(item.id) === `kw_${idStr}`)) {
+          return true;
+        }
+        // 搜索带kw-前缀的ID
+        if (favorites.some(item => String(item.id) === `kw-${idStr}`)) {
+          return true;
+        }
+        // 检查歌曲名称和艺术家匹配
+        // 这个功能需要传入完整歌曲对象而不仅仅是ID，如果将来需要可以添加
+      }
+    }
+
+    return false;
   } catch (err) {
-    console.error(`检查${type}收藏状态失败:`, err);
+    console.error(`检查收藏状态失败:`, err);
     return false;
   }
 };
@@ -214,63 +265,105 @@ export const getFavoritesCount = (type) => {
 /**
  * 更新收藏歌曲的URL
  * @param {string} songId - 歌曲ID
- * @param {string} url - 新的URL
- * @param {number} timestamp - 时间戳
- * @param {object} additionalProps - 额外需要更新的属性
- * @returns {boolean} - 是否更新成功
+ * @param {string} newUrl - 新的URL
+ * @param {number} timestamp - URL获取时间戳
+ * @param {Object} additionalData - 其他需要更新的数据
+ * @returns {boolean} - 是否成功更新
  */
-export function updateFavoriteSongUrl(songId, url, timestamp, additionalProps = {}) {
+export const updateFavoriteSongUrl = (songId, newUrl, timestamp, additionalData = {}) => {
+  if (!songId) return false;
+
   try {
     console.log(`[FavoritesService] 更新歌曲URL: ${songId}`);
+    const songs = getFavorites('SONGS');
+    let updated = false;
 
-    // 获取收藏歌曲列表
-    const favorites = getFavorites('SONGS');
+    // 将songId转换为字符串，确保比较一致性
+    const songIdStr = String(songId);
 
-    // 查找歌曲
-    const songIndex = favorites.findIndex(s => String(s.id) === String(songId));
+    // 查找匹配的歌曲，增强匹配逻辑
+    const updatedSongs = songs.map(song => {
+      // 将歌曲ID也转换为字符串进行比较
+      const currentSongId = String(song.id);
 
-    if (songIndex === -1) {
-      console.error(`[FavoritesService] 未找到ID为 ${songId} 的收藏歌曲`);
-      return false;
-    }
+      // 检查是否匹配，增加多种匹配方式
+      const isMatch =
+        currentSongId === songIdStr ||
+        // 处理带有kw_前缀或后缀的情况
+        (songIdStr.includes('kw_') && currentSongId === songIdStr.split('kw_')[0]) ||
+        (currentSongId.includes('kw_') && songIdStr === currentSongId.split('kw_')[0]) ||
+        // 处理带有时间戳后缀的情况
+        (songIdStr.includes('_') && currentSongId === songIdStr.split('_')[0]) ||
+        (currentSongId.includes('_') && songIdStr === currentSongId.split('_')[0]);
 
-    // 更新歌曲URL和时间戳
-    const updatedSong = { ...favorites[songIndex] };
+      if (isMatch) {
+        console.log(`[FavoritesService] 找到匹配歌曲: ${song.name} (ID: ${song.id} 匹配 ${songIdStr})`);
 
-    // 只有当提供了有效URL时才更新
-    if (url && url !== 'undefined' && url !== 'null') {
-      updatedSong.url = url;
-    }
+        // 创建更新后的歌曲对象
+        const updatedSong = { ...song };
 
-    // 更新时间戳
-    if (timestamp) {
-      updatedSong.timestamp = timestamp;
-    } else {
-      updatedSong.timestamp = Date.now();
-    }
-
-    // 更新额外的属性
-    if (additionalProps) {
-      Object.keys(additionalProps).forEach(key => {
-        if (additionalProps[key] !== undefined) {
-          updatedSong[key] = additionalProps[key];
+        // 如果提供了新URL，更新URL和时间戳
+        if (newUrl) {
+          updatedSong.url = newUrl;
+          updatedSong.timestamp = timestamp || Date.now();
         }
-      });
+
+        // 更新其他提供的字段
+        if (additionalData) {
+          Object.keys(additionalData).forEach(key => {
+            if (additionalData[key] !== undefined) {
+              updatedSong[key] = additionalData[key];
+            }
+          });
+        }
+
+        // 特殊处理isFromKw标记
+        if (additionalData.isFromKw !== undefined) {
+          updatedSong.isFromKw = additionalData.isFromKw;
+
+          // 如果设置为酷我歌曲，确保相关字段也正确设置
+          if (additionalData.isFromKw === true) {
+            // 如果已经有酷我RID，确保保留
+            if (additionalData.rid) {
+              updatedSong.rid = additionalData.rid;
+            }
+
+            // 对于灰色歌曲切换到酷我后，标记强制刷新URL
+            updatedSong.forceRefreshUrl = true;
+
+            console.log(`[FavoritesService] 歌曲已标记为酷我API: ${song.name} (ID: ${song.id})`);
+          }
+        }
+
+        updated = true;
+        console.log(`[FavoritesService] 成功更新歌曲 ${song.name} (ID: ${song.id}) 的URL`);
+        return updatedSong;
+      }
+      return song;
+    });
+
+    if (updated) {
+      localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(updatedSongs));
+
+      // 触发收藏状态变更事件，确保UI更新
+      try {
+        document.dispatchEvent(new CustomEvent('favorites-updated', {
+          detail: { type: 'SONGS' }
+        }));
+      } catch (e) {
+        console.error('[FavoritesService] 触发收藏更新事件失败:', e);
+      }
+
+      return true;
     }
 
-    // 更新收藏列表
-    favorites[songIndex] = updatedSong;
-
-    // 保存更新后的收藏列表
-    localStorage.setItem('favorites_songs', JSON.stringify(favorites));
-
-    console.log(`[FavoritesService] 成功更新歌曲 ${updatedSong.name} (ID: ${songId}) 的URL`);
-    return true;
-  } catch (error) {
-    console.error(`[FavoritesService] 更新歌曲URL失败:`, error);
+    console.log(`[FavoritesService] 未找到歌曲ID: ${songIdStr}，无法更新URL`);
+    return false;
+  } catch (err) {
+    console.error('[FavoritesService] 更新歌曲URL失败:', err);
     return false;
   }
-}
+};
 
 /**
  * 批量更新收藏歌曲的信息
