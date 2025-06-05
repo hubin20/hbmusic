@@ -4,6 +4,7 @@ import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import { resolve } from 'path'
 import { VitePWA } from 'vite-plugin-pwa'
+import removeConsole from 'vite-plugin-remove-console'
 
 // https://vite.dev/config/
 export default defineConfig(({ command, mode }) => {
@@ -17,6 +18,8 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       vue(),
       vueDevTools(),
+      // 在生产环境中移除所有console.log
+      mode === 'production' && removeConsole(),
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'icons/*.png'],
