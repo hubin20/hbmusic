@@ -18,7 +18,6 @@ export function initMediaSessionHandler() {
      * 播放音乐
      */
     play: () => {
-      console.log('[MediaSession] 收到播放命令');
       playerStore.togglePlayPause();
     },
 
@@ -26,7 +25,6 @@ export function initMediaSessionHandler() {
      * 暂停音乐
      */
     pause: () => {
-      console.log('[MediaSession] 收到暂停命令');
       if (playerStore.isPlaying) {
         playerStore.togglePlayPause();
       }
@@ -36,7 +34,6 @@ export function initMediaSessionHandler() {
      * 播放上一首
      */
     previous: () => {
-      console.log('[MediaSession] 收到播放上一首命令');
       playerStore.playPrevious();
     },
 
@@ -44,7 +41,6 @@ export function initMediaSessionHandler() {
      * 播放下一首
      */
     next: () => {
-      console.log('[MediaSession] 收到播放下一首命令');
       playerStore.playNext();
     },
 
@@ -65,8 +61,6 @@ export function initMediaSessionHandler() {
         if (typeof window.AndroidPlayer.setPlayingState === 'function') {
           window.AndroidPlayer.setPlayingState(playerStore.isPlaying);
         }
-
-        console.log('[MediaSession] 已更新Android媒体控制信息');
       }
 
       // 如果支持Web媒体会话API
@@ -88,8 +82,6 @@ export function initMediaSessionHandler() {
 
         // 更新播放状态
         navigator.mediaSession.playbackState = playerStore.isPlaying ? 'playing' : 'paused';
-
-        console.log('[MediaSession] 已更新Web媒体会话信息');
       }
     }
   };
@@ -109,7 +101,6 @@ export function watchPlayerChanges(playerStore, mediaControls) {
   // 监听当前歌曲变化
   playerStore.$subscribe((mutation, state) => {
     if (state.currentSong) {
-      console.log('[MediaSession] 检测到歌曲变化，更新媒体会话信息');
       mediaControls.updateNowPlaying();
     }
   });
@@ -119,7 +110,6 @@ export function watchPlayerChanges(playerStore, mediaControls) {
   playerStore.$subscribe((mutation, state) => {
     if (state.currentSong && state.currentSong.id !== lastSongId) {
       lastSongId = state.currentSong.id;
-      console.log('[MediaSession] 检测到歌曲ID变化，强制更新媒体会话信息');
       mediaControls.updateNowPlaying();
     }
   });
