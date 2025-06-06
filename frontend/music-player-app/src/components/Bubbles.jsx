@@ -41,7 +41,7 @@ const Bubbles = () => {
             width: `${bubble.size}px`,
             height: `${bubble.size}px`,
             animationDuration: `${bubble.animationDuration}s`,
-            background: `hsla(${bubble.hue}, 100%, 75%, 0.3)`,
+            background: `hsla(${bubble.hue}, 100%, 45%, 0.8)`,
             backdropFilter: 'blur(2px)',
           }}
         />

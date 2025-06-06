@@ -28,11 +28,11 @@ export default {
       interval: null,
       maxBubbles: 25,
       colorPalettes: [
-        ['#3A80D2', '#2561A8', '#1151A5'], // 更深的蓝色系
-        ['#40B868', '#1E7B47', '#125B12'], // 更深的绿色系
-        ['#8B49A6', '#7E349D', '#5C2473'], // 更深的紫色系
-        ['#D73C2C', '#B0291B', '#821B11'], // 更深的红色系
-        ['#E1B40F', '#C49A0D', '#A7850B']  // 更深的金色系
+        ['#0055FF', '#0033BB', '#001E77'], // 更深更鲜艳的蓝色系
+        ['#00BB33', '#008822', '#005511'], // 更深更鲜艳的绿色系
+        ['#9900EE', '#7700BB', '#550088'], // 更深更鲜艳的紫色系
+        ['#FF1100', '#BB0C00', '#880900'], // 更深更鲜艳的红色系
+        ['#FFBB00', '#CC9900', '#996600']  // 更深更鲜艳的金色系
       ]
     }
   },
@@ -43,7 +43,7 @@ export default {
     generateGradient() {
       const palette = this.colorPalettes[Math.floor(Math.random() * this.colorPalettes.length)]
       const angle = Math.floor(Math.random() * 360)
-      return `linear-gradient(${angle}deg, ${palette[0]}88, ${palette[1]}88, ${palette[2]}88)`
+      return `linear-gradient(${angle}deg, ${palette[0]}CC, ${palette[1]}CC, ${palette[2]}CC)`
     },
 
     /**
@@ -104,7 +104,7 @@ export default {
   position: absolute;
   bottom: -20px;
   border-radius: 50%;
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.7);
   animation: float linear forwards;
   will-change: transform;
 }
