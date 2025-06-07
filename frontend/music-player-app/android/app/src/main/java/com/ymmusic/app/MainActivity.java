@@ -180,15 +180,22 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void updateNowPlaying(String title, String artist) {
             Log.d(TAG, "更新通知栏信息: " + title + " - " + artist);
-            if (isBound && musicService != null) {
-                musicService.updateNotificationInfo(title, artist);
-            } else {
-                Log.w(TAG, "无法更新通知栏信息: 服务未绑定或为空");
-                // 尝试重新绑定服务
-                if (!isBound) {
-                    bindMusicService();
+            // 确保在主线程上执行
+            runOnUiThread(() -> {
+                try {
+                    if (isBound && musicService != null) {
+                        musicService.updateNotificationInfo(title, artist);
+                    } else {
+                        Log.w(TAG, "无法更新通知栏信息: 服务未绑定或为空");
+                        // 尝试重新绑定服务
+                        if (!isBound) {
+                            bindMusicService();
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "更新通知栏信息时出错", e);
                 }
-            }
+            });
         }
         
         /**
@@ -197,17 +204,24 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void updateNowPlayingWithCover(String title, String artist, String albumArtUrl) {
             Log.d(TAG, "更新通知栏信息(带封面): " + title + " - " + artist);
-            if (isBound && musicService != null) {
-                // 这里可以添加下载专辑封面的代码
-                // 简单起见，我们先使用默认图标
-                musicService.updateNotificationInfo(title, artist);
-            } else {
-                Log.w(TAG, "无法更新通知栏信息(带封面): 服务未绑定或为空");
-                // 尝试重新绑定服务
-                if (!isBound) {
-                    bindMusicService();
+            // 确保在主线程上执行
+            runOnUiThread(() -> {
+                try {
+                    if (isBound && musicService != null) {
+                        // 这里可以添加下载专辑封面的代码
+                        // 简单起见，我们先使用默认图标
+                        musicService.updateNotificationInfo(title, artist);
+                    } else {
+                        Log.w(TAG, "无法更新通知栏信息(带封面): 服务未绑定或为空");
+                        // 尝试重新绑定服务
+                        if (!isBound) {
+                            bindMusicService();
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "更新通知栏信息(带封面)时出错", e);
                 }
-            }
+            });
         }
         
         /**
@@ -216,15 +230,22 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void setPlayingState(boolean isPlaying) {
             Log.d(TAG, "设置播放状态: " + (isPlaying ? "播放" : "暂停"));
-            if (isBound && musicService != null) {
-                musicService.setPlayingState(isPlaying);
-            } else {
-                Log.w(TAG, "无法设置播放状态: 服务未绑定或为空");
-                // 尝试重新绑定服务
-                if (!isBound) {
-                    bindMusicService();
+            // 确保在主线程上执行
+            runOnUiThread(() -> {
+                try {
+                    if (isBound && musicService != null) {
+                        musicService.setPlayingState(isPlaying);
+                    } else {
+                        Log.w(TAG, "无法设置播放状态: 服务未绑定或为空");
+                        // 尝试重新绑定服务
+                        if (!isBound) {
+                            bindMusicService();
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "设置播放状态时出错", e);
                 }
-            }
+            });
         }
         
         /**

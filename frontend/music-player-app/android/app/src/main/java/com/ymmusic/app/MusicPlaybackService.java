@@ -74,53 +74,73 @@ public class MusicPlaybackService extends Service {
      * 初始化媒体会话
      */
     private void initMediaSession() {
-        mediaSession = new MediaSessionCompat(this, "YMMusicSession");
-        
-        // 设置媒体会话的回调
-        mediaSession.setCallback(new MediaSessionCompat.Callback() {
-            @Override
-            public void onPlay() {
-                // 通知WebView播放
-                sendCommandToWebView("play");
-                isPlaying = true;
-                updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
-                updateNotificationInfo(currentTitle, currentArtist, currentAlbumArt);
-            }
+        try {
+            mediaSession = new MediaSessionCompat(this, "YMMusicSession");
+            
+            // 设置媒体会话的回调
+            mediaSession.setCallback(new MediaSessionCompat.Callback() {
+                @Override
+                public void onPlay() {
+                    try {
+                        // 通知WebView播放
+                        sendCommandToWebView("play");
+                        isPlaying = true;
+                        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
+                        updateNotificationInfo(currentTitle, currentArtist, currentAlbumArt);
+                    } catch (Exception e) {
+                        Log.e(TAG, "媒体会话onPlay回调出错", e);
+                    }
+                }
 
-            @Override
-            public void onPause() {
-                // 通知WebView暂停
-                sendCommandToWebView("pause");
-                isPlaying = false;
-                updatePlaybackState(PlaybackStateCompat.STATE_PAUSED);
-                updateNotificationInfo(currentTitle, currentArtist, currentAlbumArt);
-            }
+                @Override
+                public void onPause() {
+                    try {
+                        // 通知WebView暂停
+                        sendCommandToWebView("pause");
+                        isPlaying = false;
+                        updatePlaybackState(PlaybackStateCompat.STATE_PAUSED);
+                        updateNotificationInfo(currentTitle, currentArtist, currentAlbumArt);
+                    } catch (Exception e) {
+                        Log.e(TAG, "媒体会话onPause回调出错", e);
+                    }
+                }
 
-            @Override
-            public void onSkipToPrevious() {
-                // 通知WebView播放上一首
-                Log.d(TAG, "收到通知栏上一首命令，通知WebView");
-                sendCommandToWebView("previous");
-                // 在通知栏点击上一首后，不立即更新通知栏信息
-                // 等待WebView处理完毕后，会通过updateNowPlaying方法更新
-            }
+                @Override
+                public void onSkipToPrevious() {
+                    try {
+                        // 通知WebView播放上一首
+                        Log.d(TAG, "收到通知栏上一首命令，通知WebView");
+                        sendCommandToWebView("previous");
+                        // 在通知栏点击上一首后，不立即更新通知栏信息
+                        // 等待WebView处理完毕后，会通过updateNowPlaying方法更新
+                    } catch (Exception e) {
+                        Log.e(TAG, "媒体会话onSkipToPrevious回调出错", e);
+                    }
+                }
 
-            @Override
-            public void onSkipToNext() {
-                // 通知WebView播放下一首
-                Log.d(TAG, "收到通知栏下一首命令，通知WebView");
-                sendCommandToWebView("next");
-                // 在通知栏点击下一首后，不立即更新通知栏信息
-                // 等待WebView处理完毕后，会通过updateNowPlaying方法更新
-            }
-        });
-        
-        // 设置媒体会话标志
-        mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | 
-                             MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
-        
-        // 激活媒体会话
-        mediaSession.setActive(true);
+                @Override
+                public void onSkipToNext() {
+                    try {
+                        // 通知WebView播放下一首
+                        Log.d(TAG, "收到通知栏下一首命令，通知WebView");
+                        sendCommandToWebView("next");
+                        // 在通知栏点击下一首后，不立即更新通知栏信息
+                        // 等待WebView处理完毕后，会通过updateNowPlaying方法更新
+                    } catch (Exception e) {
+                        Log.e(TAG, "媒体会话onSkipToNext回调出错", e);
+                    }
+                }
+            });
+            
+            // 设置媒体会话标志
+            mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | 
+                                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
+            
+            // 激活媒体会话
+            mediaSession.setActive(true);
+        } catch (Exception e) {
+            Log.e(TAG, "初始化媒体会话出错", e);
+        }
     }
 
     /**
@@ -141,38 +161,48 @@ public class MusicPlaybackService extends Service {
      * 向WebView发送命令
      */
     private void sendCommandToWebView(String command) {
-        Intent intent = new Intent("YM_MUSIC_CONTROL_ACTION");
-        intent.putExtra("command", command);
-        sendBroadcast(intent);
+        try {
+            Intent intent = new Intent("YM_MUSIC_CONTROL_ACTION");
+            intent.putExtra("command", command);
+            sendBroadcast(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "向WebView发送命令出错: " + command, e);
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "音乐播放服务已启动");
 
-        // 处理媒体按钮事件
-        MediaButtonReceiver.handleIntent(mediaSession, intent);
-
-        // 处理自定义Action
-        if (intent != null && intent.getAction() != null) {
-            switch (intent.getAction()) {
-                case ACTION_PLAY:
-                    mediaSession.getController().getTransportControls().play();
-                    break;
-                case ACTION_PAUSE:
-                    mediaSession.getController().getTransportControls().pause();
-                    break;
-                case ACTION_PREVIOUS:
-                    mediaSession.getController().getTransportControls().skipToPrevious();
-                    break;
-                case ACTION_NEXT:
-                    mediaSession.getController().getTransportControls().skipToNext();
-                    break;
+        try {
+            // 处理媒体按钮事件
+            if (intent != null) {
+                MediaButtonReceiver.handleIntent(mediaSession, intent);
             }
-        }
 
-        // 启动前台服务，显示通知
-        startForeground(NOTIFICATION_ID, createNotification());
+            // 处理自定义Action
+            if (intent != null && intent.getAction() != null) {
+                switch (intent.getAction()) {
+                    case ACTION_PLAY:
+                        mediaSession.getController().getTransportControls().play();
+                        break;
+                    case ACTION_PAUSE:
+                        mediaSession.getController().getTransportControls().pause();
+                        break;
+                    case ACTION_PREVIOUS:
+                        mediaSession.getController().getTransportControls().skipToPrevious();
+                        break;
+                    case ACTION_NEXT:
+                        mediaSession.getController().getTransportControls().skipToNext();
+                        break;
+                }
+            }
+
+            // 启动前台服务，显示通知
+            startForeground(NOTIFICATION_ID, createNotification());
+        } catch (Exception e) {
+            Log.e(TAG, "onStartCommand出错", e);
+        }
 
         // 如果服务被杀死，系统将尝试重新创建服务
         return START_STICKY;
@@ -188,14 +218,20 @@ public class MusicPlaybackService extends Service {
     public void onDestroy() {
         Log.d(TAG, "音乐播放服务已销毁");
 
-        // 释放媒体会话
-        if (mediaSession != null) {
-            mediaSession.release();
-        }
+        try {
+            // 释放媒体会话
+            if (mediaSession != null) {
+                mediaSession.setActive(false);
+                mediaSession.release();
+                mediaSession = null;
+            }
 
-        // 释放WakeLock
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
+            // 释放WakeLock
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "onDestroy出错", e);
         }
 
         super.onDestroy();
@@ -285,41 +321,59 @@ public class MusicPlaybackService extends Service {
     }
 
     /**
-     * 更新通知信息
-     * @param title 歌曲标题
-     * @param artist 艺术家
+     * 更新通知栏信息
      */
     public void updateNotificationInfo(String title, String artist) {
-        updateNotificationInfo(title, artist, null);
+        try {
+            this.currentTitle = title;
+            this.currentArtist = artist;
+            
+            // 更新通知
+            NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager != null) {
+                notificationManager.notify(NOTIFICATION_ID, createNotification());
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "更新通知栏信息出错", e);
+        }
     }
 
     /**
-     * 更新通知信息
-     * @param title 歌曲标题
-     * @param artist 艺术家
-     * @param albumArt 专辑封面
+     * 更新通知栏信息（带专辑封面）
      */
     public void updateNotificationInfo(String title, String artist, Bitmap albumArt) {
-        // 更新当前信息
-        Log.d(TAG, "更新通知栏信息: " + title + " - " + artist);
-        this.currentTitle = title;
-        this.currentArtist = artist;
-        if (albumArt != null) {
+        try {
+            this.currentTitle = title;
+            this.currentArtist = artist;
             this.currentAlbumArt = albumArt;
+            
+            // 更新通知
+            NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager != null) {
+                notificationManager.notify(NOTIFICATION_ID, createNotification());
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "更新通知栏信息(带封面)出错", e);
         }
-
-        // 更新通知
-        NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        notificationManager.notify(NOTIFICATION_ID, createMediaStyleNotification(title, artist, this.currentAlbumArt));
     }
 
     /**
      * 设置播放状态
-     * @param isPlaying 是否正在播放
      */
     public void setPlayingState(boolean isPlaying) {
-        this.isPlaying = isPlaying;
-        updatePlaybackState(isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED);
-        updateNotificationInfo(currentTitle, currentArtist, currentAlbumArt);
+        try {
+            this.isPlaying = isPlaying;
+            
+            // 更新播放状态
+            updatePlaybackState(isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED);
+            
+            // 更新通知
+            NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager != null) {
+                notificationManager.notify(NOTIFICATION_ID, createNotification());
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "设置播放状态出错", e);
+        }
     }
 } 
